@@ -379,11 +379,23 @@ export default function App() {
       // Car following logic
       const carAhead = vehicles.filter(other => 
         other.id !== v.id && 
-        other.laneId === v.laneId && 
-        // If I am NOT turning, I only care about vehicles that are also NOT turning
-        // This prevents turning cars from "blocking" vehicles still waiting at the line
-        (!v.isTurning ? !other.isTurning : true)
+        // Logic for identifying potential collisions
+        ((other.laneId === v.laneId && (!v.isTurning ? !other.isTurning : true)) || 
+         (v.isTurning && other.isTurning))
       ).find(other => {
+          if (v.isTurning && other.isTurning) {
+              const dx = other.x - v.x;
+              const dy = other.y - v.y;
+              const dist = Math.sqrt(dx*dx + dy*dy);
+              // Same lane turned, check if other is ahead in progress
+              if (other.laneId === v.laneId) {
+                  return dist < SAFE_DISTANCE && (other.turnProgress ?? 0) > (v.turnProgress ?? 0);
+              }
+              // Different lanes turning (intersection conflict)
+              // We use a tighter safe distance for different lanes to allow tight turns
+              return dist < SAFE_DISTANCE * 0.7;
+          }
+          
           if (lane.direction === 'N') return other.y < v.y && (v.y - other.y) < SAFE_DISTANCE;
           if (lane.direction === 'S') return other.y > v.y && (other.y - v.y) < SAFE_DISTANCE;
           if (lane.direction === 'E') return other.x > v.x && (other.x - v.x) < SAFE_DISTANCE;
@@ -466,11 +478,11 @@ export default function App() {
 
           if (v.turnProgress >= 1) {
               v.isTurning = false;
-              // Set final velocity based on exit direction
-              if (lane.direction === 'N') { v.vx = -newSpeed; v.vy = 0; }
-              if (lane.direction === 'S') { v.vx = newSpeed; v.vy = 0; }
-              if (lane.direction === 'E') { v.vx = 0; v.vy = -newSpeed; }
-              if (lane.direction === 'W') { v.vx = 0; v.vy = newSpeed; }
+              // Set final velocity based on exit direction and HANDOVER to new laneId
+              if (lane.direction === 'N') { v.vx = -newSpeed; v.vy = 0; v.laneId = 'wb-thru'; }
+              if (lane.direction === 'S') { v.vx = newSpeed; v.vy = 0; v.laneId = 'eb-thru'; }
+              if (lane.direction === 'E') { v.vx = 0; v.vy = -newSpeed; v.laneId = 'nb-thru'; }
+              if (lane.direction === 'W') { v.vx = 0; v.vy = newSpeed; v.laneId = 'sb-thru'; }
           }
       } else {
           if (lane.direction === 'N') { v.vy = -newSpeed; v.vx = 0; }
