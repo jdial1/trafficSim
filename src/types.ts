@@ -37,6 +37,7 @@ export interface Vehicle {
   turnCenterX?: number;
   turnCenterY?: number;
   turnRadius?: number;
+  speedType?: 'NORMAL' | 'FAST' | 'SLOW';
 }
 
 export interface Lane {

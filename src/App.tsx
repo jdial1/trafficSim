@@ -194,14 +194,14 @@ export default function App() {
             Object.keys(next).forEach(pStr => {
                 const p = parseInt(pStr);
                 const count = laneCounts[p] || 0;
-                // Simple heuristics: 1s extra green per 2 cars, range 5-30
-                const targetGreen = Math.max(5, Math.min(30, 5 + Math.floor(count / 2)));
-                if (next[p] < targetGreen) next[p] += 1;
+                // Aggressive heuristics: 1s extra green per 1 car, range 5-60
+                const targetGreen = Math.max(5, Math.min(60, 5 + Math.floor(count / 1.5)));
+                if (next[p] < targetGreen) next[p] += 2; // Ramps up faster
                 else if (next[p] > targetGreen) next[p] -= 1;
             });
             return next;
         });
-    }, 5000);
+    }, 2000); // More frequent updates
     return () => clearInterval(interval);
   }, [isPlaying, isAdaptive, offScreenQueues]);
 
@@ -280,6 +280,11 @@ export default function App() {
             if (edgeDist > SAFE_DISTANCE) {
                 const colors = ['#58A6FF', '#F85149', '#3FB950', '#D29922', '#8b5cf6', '#ec4899', '#ffcc00'];
                 const startAngle = lane.direction === 'N' ? -Math.PI/2 : lane.direction === 'S' ? Math.PI/2 : lane.direction === 'E' ? 0 : Math.PI;
+                const rand = Math.random();
+                let speedType: 'NORMAL' | 'FAST' | 'SLOW' = 'NORMAL';
+                if (rand < 0.02) speedType = 'FAST';
+                else if (rand < 0.04) speedType = 'SLOW';
+
                 const newVehicle: Vehicle = {
                   id: Math.random().toString(36).substr(2, 9),
                   x: lane.startX,
@@ -291,6 +296,7 @@ export default function App() {
                   color: colors[Math.floor(Math.random() * colors.length)],
                   width: 18,
                   length: 30,
+                  speedType,
                 };
                 vehiclesRef.current.push(newVehicle);
             } else {
@@ -322,9 +328,15 @@ export default function App() {
                         return d < minDist ? d : minDist;
                     }, Infinity);
 
-                    if (edgeDist > SAFE_DISTANCE) {
+                    // Reduced spawn distance to allow more cars to enter
+                    if (edgeDist > 40) {
                         const colors = ['#58A6FF', '#F85149', '#3FB950', '#D29922', '#8b5cf6', '#ec4899', '#ffcc00'];
                         const startAngle = lane.direction === 'N' ? -Math.PI/2 : lane.direction === 'S' ? Math.PI/2 : lane.direction === 'E' ? 0 : Math.PI;
+                        const rand = Math.random();
+                        let speedType: 'NORMAL' | 'FAST' | 'SLOW' = 'NORMAL';
+                        if (rand < 0.02) speedType = 'FAST';
+                        else if (rand < 0.04) speedType = 'SLOW';
+
                         const newVehicle: Vehicle = {
                           id: Math.random().toString(36).substr(2, 9),
                           x: lane.startX,
@@ -336,6 +348,7 @@ export default function App() {
                           color: colors[Math.floor(Math.random() * colors.length)],
                           width: 18,
                           length: 30,
+                          speedType,
                         };
                         vehiclesRef.current.push(newVehicle);
                         next[lane.id]--;
@@ -359,6 +372,8 @@ export default function App() {
       
       // Target Speed
       let targetSpeed = VEHICLE_SPEED;
+      if (v.speedType === 'FAST') targetSpeed *= 1.4;
+      if (v.speedType === 'SLOW') targetSpeed *= 0.6;
       
       // Distance to intersection stop line
       let distToStop = Infinity;
@@ -404,7 +419,9 @@ export default function App() {
       });
 
       if (carAhead) {
-        targetSpeed = 0;
+        const otherSpeed = Math.sqrt(carAhead.vx * carAhead.vx + carAhead.vy * carAhead.vy);
+        targetSpeed = Math.min(targetSpeed, otherSpeed);
+        if (targetSpeed < 0.1) targetSpeed = 0;
       }
 
       // Physics
@@ -420,44 +437,78 @@ export default function App() {
       }
       
       // Turning logic
-      if (lane.type === 'LEFT' && !v.isTurning) {
+      if (!v.isTurning) {
         const inIntersection = Math.abs(v.x - CANVAS_SIZE / 2) < INTERSECTION_SIZE / 2 && Math.abs(v.y - CANVAS_SIZE / 2) < INTERSECTION_SIZE / 2;
         if (inIntersection) {
             const centerX = CANVAS_SIZE / 2;
             const centerY = CANVAS_SIZE / 2;
-            const R = LANE_WIDTH; // Fixed turn radius
-            
             let shouldStart = false;
-            if (lane.direction === 'N' && v.y <= centerY + LANE_WIDTH / 2) {
-                v.turnCenterX = centerX - LANE_WIDTH / 2;
-                v.turnCenterY = centerY + LANE_WIDTH / 2;
-                v.turnAngleStart = 0;
-                v.turnAngleEnd = -Math.PI / 2;
-                shouldStart = true;
-            } else if (lane.direction === 'S' && v.y >= centerY - LANE_WIDTH / 2) {
-                v.turnCenterX = centerX + LANE_WIDTH / 2;
-                v.turnCenterY = centerY - LANE_WIDTH / 2;
-                v.turnAngleStart = Math.PI;
-                v.turnAngleEnd = Math.PI / 2;
-                shouldStart = true;
-            } else if (lane.direction === 'E' && v.x >= centerX - LANE_WIDTH / 2) {
-                v.turnCenterX = centerX - LANE_WIDTH / 2;
-                v.turnCenterY = centerY - LANE_WIDTH / 2;
-                v.turnAngleStart = Math.PI / 2;
-                v.turnAngleEnd = Math.PI;
-                shouldStart = true;
-            } else if (lane.direction === 'W' && v.x <= centerX + LANE_WIDTH / 2) {
-                v.turnCenterX = centerX + LANE_WIDTH / 2;
-                v.turnCenterY = centerY + LANE_WIDTH / 2;
-                v.turnAngleStart = -Math.PI / 2;
-                v.turnAngleEnd = 0;
-                shouldStart = true;
+
+            if (lane.type === 'LEFT') {
+                if (lane.direction === 'N' && v.y <= centerY + 120) {
+                    v.turnCenterX = centerX - 120;
+                    v.turnCenterY = centerY + 120;
+                    v.turnRadius = 140; 
+                    v.turnAngleStart = 0;
+                    v.turnAngleEnd = -Math.PI / 2;
+                    shouldStart = true;
+                } else if (lane.direction === 'S' && v.y >= centerY - 120) {
+                    v.turnCenterX = centerX + 120;
+                    v.turnCenterY = centerY - 120;
+                    v.turnRadius = 140;
+                    v.turnAngleStart = Math.PI;
+                    v.turnAngleEnd = Math.PI / 2;
+                    shouldStart = true;
+                } else if (lane.direction === 'E' && v.x >= centerX - 120) {
+                    v.turnCenterX = centerX - 120;
+                    v.turnCenterY = centerY - 120;
+                    v.turnRadius = 140;
+                    v.turnAngleStart = Math.PI / 2;
+                    v.turnAngleEnd = 0;
+                    shouldStart = true;
+                } else if (lane.direction === 'W' && v.x <= centerX + 120) {
+                    v.turnCenterX = centerX + 120;
+                    v.turnCenterY = centerY + 120;
+                    v.turnRadius = 140;
+                    v.turnAngleStart = -Math.PI / 2;
+                    v.turnAngleEnd = -Math.PI;
+                    shouldStart = true;
+                }
+            } else if (lane.type === 'RIGHT') {
+                if (lane.direction === 'N' && v.y <= centerY + 120) {
+                    v.turnCenterX = centerX + 120;
+                    v.turnCenterY = centerY + 120;
+                    v.turnRadius = 20;
+                    v.turnAngleStart = Math.PI;
+                    v.turnAngleEnd = -Math.PI / 2;
+                    shouldStart = true;
+                } else if (lane.direction === 'S' && v.y >= centerY - 120) {
+                    v.turnCenterX = centerX - 120;
+                    v.turnCenterY = centerY - 120;
+                    v.turnRadius = 20;
+                    v.turnAngleStart = 0;
+                    v.turnAngleEnd = Math.PI / 2;
+                    shouldStart = true;
+                } else if (lane.direction === 'E' && v.x >= centerX - 120) {
+                    v.turnCenterX = centerX - 120;
+                    v.turnCenterY = centerY + 120;
+                    v.turnRadius = 20;
+                    v.turnAngleStart = -Math.PI / 2;
+                    v.turnAngleEnd = 0;
+                    shouldStart = true;
+                } else if (lane.direction === 'W' && v.x <= centerX + 120) {
+                    v.turnCenterX = centerX + 120;
+                    v.turnCenterY = centerY - 120;
+                    v.turnRadius = 20;
+                    v.turnAngleStart = Math.PI / 2;
+                    v.turnAngleEnd = Math.PI;
+                    shouldStart = true;
+                }
             }
 
             if (shouldStart) {
                 v.isTurning = true;
                 v.turnProgress = 0;
-                v.turnRadius = LANE_WIDTH;
             }
         }
       }
@@ -479,10 +530,18 @@ export default function App() {
           if (v.turnProgress >= 1) {
               v.isTurning = false;
               // Set final velocity based on exit direction and HANDOVER to new laneId
-              if (lane.direction === 'N') { v.vx = -newSpeed; v.vy = 0; v.laneId = 'wb-thru'; }
-              if (lane.direction === 'S') { v.vx = newSpeed; v.vy = 0; v.laneId = 'eb-thru'; }
-              if (lane.direction === 'E') { v.vx = 0; v.vy = -newSpeed; v.laneId = 'nb-thru'; }
-              if (lane.direction === 'W') { v.vx = 0; v.vy = newSpeed; v.laneId = 'sb-thru'; }
+              if (lane.type === 'LEFT') {
+                  if (lane.direction === 'N') { v.vx = -newSpeed; v.vy = 0; v.laneId = 'wb-left'; }
+                  if (lane.direction === 'S') { v.vx = newSpeed; v.vy = 0; v.laneId = 'eb-left'; }
+                  if (lane.direction === 'E') { v.vx = 0; v.vy = -newSpeed; v.laneId = 'nb-left'; }
+                  if (lane.direction === 'W') { v.vx = 0; v.vy = newSpeed; v.laneId = 'sb-left'; }
+              } else {
+                  // RIGHT
+                  if (lane.direction === 'N') { v.vx = newSpeed; v.vy = 0; v.laneId = 'eb-right'; }
+                  if (lane.direction === 'S') { v.vx = -newSpeed; v.vy = 0; v.laneId = 'wb-right'; }
+                  if (lane.direction === 'E') { v.vx = 0; v.vy = newSpeed; v.laneId = 'sb-right'; }
+                  if (lane.direction === 'W') { v.vx = 0; v.vy = -newSpeed; v.laneId = 'nb-right'; }
+              }
           }
       } else {
           if (lane.direction === 'N') { v.vy = -newSpeed; v.vx = 0; }
@@ -518,20 +577,52 @@ export default function App() {
 
     // Lane Lines
     ctx.strokeStyle = '#2D333B';
-    ctx.setLineDash([20, 20]);
     ctx.lineWidth = 1;
     
-    // Vertical dashes
+    const drawLaneMarkers = (x: number, y: number, length: number, horizontal: boolean) => {
+        ctx.setLineDash([20, 20]);
+        ctx.beginPath();
+        if (horizontal) {
+            ctx.moveTo(x, y); ctx.lineTo(x + length, y);
+        } else {
+            ctx.moveTo(x, y); ctx.lineTo(x, y + length);
+        }
+        ctx.stroke();
+    };
+
+    // Centerlines (Double Solid)
+    ctx.setLineDash([]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#444c56';
+    // Vertical centerline
     ctx.beginPath();
-    ctx.moveTo(centerX, 0); ctx.lineTo(centerX, centerY - INTERSECTION_SIZE / 2);
-    ctx.moveTo(centerX, centerY + INTERSECTION_SIZE / 2); ctx.lineTo(centerX, CANVAS_SIZE);
+    ctx.moveTo(centerX - 2, 0); ctx.lineTo(centerX - 2, centerY - INTERSECTION_SIZE / 2);
+    ctx.moveTo(centerX + 2, 0); ctx.lineTo(centerX + 2, centerY - INTERSECTION_SIZE / 2);
+    ctx.moveTo(centerX - 2, centerY + INTERSECTION_SIZE / 2); ctx.lineTo(centerX - 2, CANVAS_SIZE);
+    ctx.moveTo(centerX + 2, centerY + INTERSECTION_SIZE / 2); ctx.lineTo(centerX + 2, CANVAS_SIZE);
+    // Horizontal centerline
+    ctx.moveTo(0, centerY - 2); ctx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY - 2);
+    ctx.moveTo(0, centerY + 2); ctx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY + 2);
+    ctx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY - 2); ctx.lineTo(CANVAS_SIZE, centerY - 2);
+    ctx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY + 2); ctx.lineTo(CANVAS_SIZE, centerY + 2);
     ctx.stroke();
 
-    // Horizontal dashes
-    ctx.beginPath();
-    ctx.moveTo(0, centerY); ctx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY);
-    ctx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY); ctx.lineTo(CANVAS_SIZE, centerY);
-    ctx.stroke();
+    // Lane separators
+    ctx.strokeStyle = '#2D333B';
+    ctx.lineWidth = 1;
+    [LANE_WIDTH, LANE_WIDTH * 2].forEach(offset => {
+        // Vertical separators
+        drawLaneMarkers(centerX + offset, 0, centerY - INTERSECTION_SIZE / 2, false);
+        drawLaneMarkers(centerX - offset, 0, centerY - INTERSECTION_SIZE / 2, false);
+        drawLaneMarkers(centerX + offset, centerY + INTERSECTION_SIZE / 2, CANVAS_SIZE - (centerY + INTERSECTION_SIZE / 2), false);
+        drawLaneMarkers(centerX - offset, centerY + INTERSECTION_SIZE / 2, CANVAS_SIZE - (centerY + INTERSECTION_SIZE / 2), false);
+        
+        // Horizontal separators
+        drawLaneMarkers(0, centerY + offset, centerX - INTERSECTION_SIZE / 2, true);
+        drawLaneMarkers(0, centerY - offset, centerX - INTERSECTION_SIZE / 2, true);
+        drawLaneMarkers(centerX + INTERSECTION_SIZE / 2, centerY + offset, CANVAS_SIZE - (centerX + INTERSECTION_SIZE / 2), true);
+        drawLaneMarkers(centerX + INTERSECTION_SIZE / 2, centerY - offset, CANVAS_SIZE - (centerX + INTERSECTION_SIZE / 2), true);
+    });
 
     // Solid Stop Lines
     ctx.setLineDash([]);
@@ -563,6 +654,17 @@ export default function App() {
         ctx.fillStyle = '#F85149';
         ctx.fillRect(-v.length / 2, -v.width / 2, 2, 4);
         ctx.fillRect(-v.length / 2, v.width / 2 - 4, 2, 4);
+      }
+
+      // Speed Type Icon
+      if (v.speedType === 'FAST') {
+          ctx.fillStyle = '#FFD700'; // Gold
+          ctx.beginPath();
+          ctx.moveTo(0, -4); ctx.lineTo(4, 0); ctx.lineTo(0, 4); ctx.lineTo(-4, 0); ctx.fill();
+      } else if (v.speedType === 'SLOW') {
+          ctx.fillStyle = '#8B949E'; // Muted Gray
+          ctx.beginPath();
+          ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
       }
       
       ctx.restore();
@@ -621,20 +723,24 @@ export default function App() {
         }
     });
 
-    drawSignal(centerX + 60, centerY + 120, 0, [Phase.P2]); // Thru
-    drawSignal(centerX + 20, centerY + 120, 0, [Phase.P1], true); // Left
+    drawSignal(centerX + 100, centerY + 130, 0, [Phase.P2]); // Right
+    drawSignal(centerX + 60, centerY + 130, 0, [Phase.P2]); // Thru
+    drawSignal(centerX + 20, centerY + 130, 0, [Phase.P1], true); // Left
     
     // Southbound
-    drawSignal(centerX - 60, centerY - 120, Math.PI, [Phase.P6]); // Thru
-    drawSignal(centerX - 20, centerY - 120, Math.PI, [Phase.P5], true); // Left
+    drawSignal(centerX - 100, centerY - 130, Math.PI, [Phase.P6]); // Right
+    drawSignal(centerX - 60, centerY - 130, Math.PI, [Phase.P6]); // Thru
+    drawSignal(centerX - 20, centerY - 130, Math.PI, [Phase.P5], true); // Left
     
     // Eastbound
-    drawSignal(centerX - 120, centerY - 60, -Math.PI/2, [Phase.P8]); // Thru
-    drawSignal(centerX - 120, centerY - 20, -Math.PI/2, [Phase.P7], true); // Left
+    drawSignal(centerX - 130, centerY + 100, -Math.PI/2, [Phase.P8]); // Right
+    drawSignal(centerX - 130, centerY + 60, -Math.PI/2, [Phase.P8]); // Thru
+    drawSignal(centerX - 130, centerY + 20, -Math.PI/2, [Phase.P7], true); // Left
     
     // Westbound
-    drawSignal(centerX + 120, centerY + 60, Math.PI/2, [Phase.P4]); // Thru
-    drawSignal(centerX + 120, centerY + 20, Math.PI/2, [Phase.P3], true); // Left
+    drawSignal(centerX + 130, centerY - 100, Math.PI/2, [Phase.P4]); // Right
+    drawSignal(centerX + 130, centerY - 60, Math.PI/2, [Phase.P4]); // Thru
+    drawSignal(centerX + 130, centerY - 20, Math.PI/2, [Phase.P3], true); // Left
 
   }, [activePhases, lightState]);
 
