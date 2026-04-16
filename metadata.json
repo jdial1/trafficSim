@@ -1,0 +1,6 @@
+{
+  "name": "Ring & Barrier Traffic Sim",
+  "description": "A top-down traffic simulator featuring standard 8-phase Ring and Barrier controller logic with adjustable timings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
