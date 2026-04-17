@@ -18,6 +18,18 @@ const BASE_SAFE_GAP = 25;
 const LANE_MAP = new Map<string, Lane>(LANES.map(l => [l.id, l]));
 const VEHICLE_COLORS = vehicleCatalog.colors;
 
+const VIEWPORT_MOBILE_MAX_WIDTH = 767;
+const ZOOM_STEP = 0.1;
+const MOBILE_EXTRA_ZOOM_STEPS = 2;
+
+function narrowViewport() {
+  return typeof window !== 'undefined' && window.matchMedia(`(max-width: ${VIEWPORT_MOBILE_MAX_WIDTH}px)`).matches;
+}
+
+function defaultZoom() {
+  return narrowViewport() ? Math.min(3, 1 + MOBILE_EXTRA_ZOOM_STEPS * ZOOM_STEP) : 1;
+}
+
 const LEGENDARY_SPAWN_CHANCE = 0.002;
 const MovementLabels: Record<number, string> = {
   [Movement.NORTHBOUND_LEFT]: 'NORTH_LEFT',
@@ -319,7 +331,7 @@ export default function App() {
   const [isAdaptive, setIsAdaptive] = useState(true);
   
   // UI State
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => narrowViewport());
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
     phaseTimings: true,
     queue: true,
@@ -338,7 +350,7 @@ export default function App() {
   const [lightState, setLightState] = useState<LightState>('GREEN');
   const [timer, setTimer] = useState(0);
   const [logs, setLogs] = useState<{ id: string, time: string, event: string, color?: string }[]>([]);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(() => defaultZoom());
   
   // Store accumulated demand per phase over the current cycle
   const cycleDemandRef = useRef<number[]>([]);
@@ -1565,21 +1577,21 @@ phase(4):
       <main className="col-start-2 row-start-2 relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]">
         <div className="absolute top-6 right-6 flex flex-col gap-2 z-20">
           <button 
-            onClick={() => setZoom(z => Math.min(3, z + 0.1))}
+            onClick={() => setZoom(z => Math.min(3, z + ZOOM_STEP))}
             className="p-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
             title="Zoom In"
           >
             <Plus size={18} />
           </button>
           <button 
-            onClick={() => setZoom(z => Math.max(0.5, z - 0.1))}
+            onClick={() => setZoom(z => Math.max(0.5, z - ZOOM_STEP))}
             className="p-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
             title="Zoom Out"
           >
             <Minus size={18} />
           </button>
           <button 
-            onClick={() => setZoom(1)}
+            onClick={() => setZoom(defaultZoom())}
             className="py-1 px-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[10px] font-mono text-[#8B949E] hover:text-white transition-all shadow-xl"
           >
             RESET
