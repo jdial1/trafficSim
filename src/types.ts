@@ -27,6 +27,8 @@ export type VehicleType = 'CAR' | 'MOTORCYCLE' | 'BUS' | 'TRUCK';
 export interface Vehicle {
   id: string;
   vType: VehicleType;
+  rareSkin?: boolean;
+  legendarySkin?: boolean;
   accel: number;
   decel: number;
   x: number;

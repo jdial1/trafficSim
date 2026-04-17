@@ -5,17 +5,20 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Save } from 'lucide-react';
-import { Movement, Vehicle, Lane, LightState, MovementTiming } from './types';
+import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Save, Plus, Minus } from 'lucide-react';
+import { Movement, Vehicle, Lane, LightState, MovementTiming, VehicleType } from './types';
 import { parseTrafficProgram, Phase } from './interpreter';
 import { CANVAS_SIZE, INTERSECTION_SIZE, LANE_WIDTH, LANES, DEFAULT_TIMINGS, DEFAULT_PHASE_GREEN_SECONDS, DEFAULT_BUILTIN_PHASE_TIMINGS, BASE_SPAWN_RATE, SPAWN_DRIFT_SPEED, MIN_PHASE_GREEN_SECONDS, MAX_TOTAL_LOOP_SECONDS, clampPhaseTimingsToLoopCap, PHASE_TEMPLATES } from './constants';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import vehicleCatalog from './vehicles.json';
+import { renderVehicleSprite } from './renderVehicleDesign';
 
 const STOP_LINE = INTERSECTION_SIZE / 2 + 10;
 const BASE_SAFE_GAP = 25;
 const LANE_MAP = new Map<string, Lane>(LANES.map(l => [l.id, l]));
-const VEHICLE_COLORS = ['#0366d6', '#58A6FF', '#3FB950', '#ffcc00', '#D29922', '#f78166', '#F85149'];
+const VEHICLE_COLORS = vehicleCatalog.colors;
 
+const LEGENDARY_SPAWN_CHANCE = 0.002;
 const MovementLabels: Record<number, string> = {
   [Movement.NORTHBOUND_LEFT]: 'NORTH_LEFT',
   [Movement.NORTHBOUND_STRAIGHT]: 'NORTH_STRAIGHT',
@@ -335,6 +338,7 @@ export default function App() {
   const [lightState, setLightState] = useState<LightState>('GREEN');
   const [timer, setTimer] = useState(0);
   const [logs, setLogs] = useState<{ id: string, time: string, event: string, color?: string }[]>([]);
+  const [zoom, setZoom] = useState(1);
   
   // Store accumulated demand per phase over the current cycle
   const cycleDemandRef = useRef<number[]>([]);
@@ -426,6 +430,8 @@ phase(4):
   }, [compile]);
 
   const vehiclesRef = useRef<Vehicle[]>([]);
+  const forceRareSpawnRef = useRef(false);
+  const forceLegendarySpawnRef = useRef(false);
   const laneCarsCacheRef = useRef<Record<string, Vehicle[]>>({});
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const requestRef = useRef<number>(null);
@@ -445,6 +451,38 @@ phase(4):
   useEffect(() => {
     addLog('SYS BOOT OK', 'var(--green)');
   }, []);
+
+  useEffect(() => {
+    const toggleLegendarySpawnTest = () => {
+      forceLegendarySpawnRef.current = !forceLegendarySpawnRef.current;
+      if (forceLegendarySpawnRef.current) forceRareSpawnRef.current = false;
+      addLog(
+        forceLegendarySpawnRef.current ? 'LEGENDARY_SPAWN_TEST_ON' : 'LEGENDARY_SPAWN_TEST_OFF',
+        forceLegendarySpawnRef.current ? 'var(--yellow)' : 'var(--green)',
+      );
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'F8') {
+        e.preventDefault();
+        forceRareSpawnRef.current = !forceRareSpawnRef.current;
+        if (forceRareSpawnRef.current) forceLegendarySpawnRef.current = false;
+        addLog(
+          forceRareSpawnRef.current ? 'RARE_SPAWN_TEST_ON' : 'RARE_SPAWN_TEST_OFF',
+          forceRareSpawnRef.current ? 'var(--yellow)' : 'var(--green)',
+        );
+      }
+      if (e.code === 'F9') {
+        e.preventDefault();
+        toggleLegendarySpawnTest();
+      }
+      if (e.code === 'KeyL' && e.ctrlKey && e.shiftKey) {
+        e.preventDefault();
+        toggleLegendarySpawnTest();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [addLog]);
 
   // Helper to get active movements for current phase
   const getActiveMovements = useCallback((phase: number) => {
@@ -664,15 +702,30 @@ phase(4):
             const currentLaneSpeed = carsInLane.length > 0 ? Math.abs(carsInLane[0].vy || carsInLane[0].vx) : 0;
             
             const r = Math.random();
-            let vType: 'CAR' | 'MOTORCYCLE' | 'BUS' | 'TRUCK' = 'CAR';
-            let width = 18, length = 30, cruiseSpeed = 2.5 + Math.random(), accel = 0.08, decel = 0.2;
-            
-            if (r < 0.15) {
-              vType = 'MOTORCYCLE'; width = 8; length = 18; cruiseSpeed = 3.0 + Math.random(); accel = 0.12; decel = 0.3;
-            } else if (r < 0.25) {
-              vType = 'BUS'; width = 20; length = 60; cruiseSpeed = 1.5 + Math.random(); accel = 0.04; decel = 0.1;
-            } else if (r < 0.40) {
-              vType = 'TRUCK'; width = 20; length = 45; cruiseSpeed = 1.8 + Math.random(); accel = 0.05; decel = 0.12;
+            let spec = vehicleCatalog.defaultSpawn;
+            for (let si = 0; si < vehicleCatalog.spawnRollOrder.length; si++) {
+              const row = vehicleCatalog.spawnRollOrder[si];
+              if (r < row.rLessThan) {
+                spec = row;
+                break;
+              }
+            }
+            const vType = spec.vType as VehicleType;
+            const width = spec.width;
+            const length = spec.length;
+            const cruiseSpeed = spec.cruiseSpeedMin + Math.random() * (spec.cruiseSpeedMax - spec.cruiseSpeedMin);
+            const accel = spec.accel;
+            const decel = spec.decel;
+
+            let legendarySkin = false;
+            let rareSkin = false;
+            if (forceLegendarySpawnRef.current) {
+              legendarySkin = true;
+            } else if (forceRareSpawnRef.current) {
+              rareSkin = true;
+            } else {
+              legendarySkin = Math.random() < LEGENDARY_SPAWN_CHANCE;
+              rareSkin = !legendarySkin && Math.random() < 0.01;
             }
 
             const safeDist = BASE_SAFE_GAP + length / 2 + (carsInLane[0]?.length || 30) / 2;
@@ -687,6 +740,8 @@ phase(4):
               const newVehicle: Vehicle = {
                 id: Math.random().toString(36).substr(2, 9),
                 vType,
+                legendarySkin,
+                rareSkin,
                 accel,
                 decel,
                 x: lane.startX,
@@ -979,7 +1034,7 @@ phase(4):
           bCtx.save();
           bCtx.translate(x, y);
           bCtx.rotate(angle);
-          bCtx.fillStyle = '#FFFFFF';
+          bCtx.fillStyle = '#B8C0CC';
           bCtx.font = '700 24px "Material Symbols Outlined"';
           bCtx.textAlign = 'center';
           bCtx.textBaseline = 'middle';
@@ -1120,70 +1175,28 @@ phase(4):
       ctx.save();
       ctx.translate(v.x, v.y);
       ctx.rotate(v.angle);
-      
-      // Car body
-      ctx.fillStyle = v.color;
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(-v.length / 2, -v.width / 2, v.length, v.width, 2);
-      ctx.fill();
-      ctx.stroke();
-
-      // Extra visual details based on vehicle type
-      if (v.vType === 'BUS' || v.vType === 'TRUCK') {
-        ctx.fillStyle = '#1A1D23';
-        ctx.fillRect(-v.length / 2 + 5, -v.width / 2 + 2, 10, v.width - 4); // windshield
-        ctx.fillStyle = 'rgba(0,0,0,0.2)';
-        ctx.fillRect(-v.length / 2 + 20, -v.width / 2 + 2, v.length - 25, v.width - 4); // roof detail
-      } else if (v.vType === 'CAR') {
-        ctx.fillStyle = '#1A1D23';
-        ctx.fillRect(-v.length / 2 + 8, -v.width / 2 + 2, 6, v.width - 4); // windshield
-        ctx.fillRect(v.length / 2 - 6, -v.width / 2 + 2, 4, v.width - 4); // rear window
-      }
+      if (v.vType === 'MOTORCYCLE') ctx.scale(1.25, 1);
 
       const lane = LANE_MAP.get(v.laneId);
-      
-      // Tail lights if braking or stopped
       const isStopped = Math.abs(v.vx) < 0.1 && Math.abs(v.vy) < 0.1;
       const brakeIntensity = v.brakeIntensity || 0;
-      const isMoto = v.vType === 'MOTORCYCLE';
-      const lightW = isMoto ? 2 : 3;
-      const lightL = isMoto ? 4 : 6;
-      const rightLightY = isMoto ? -lightL / 2 : v.width / 2 - lightL;
-      const leftLightY = isMoto ? -lightL / 2 : -v.width / 2;
+      const isBraking = isStopped || brakeIntensity > 0;
 
-      if (isStopped || brakeIntensity > 0) {
-        ctx.globalAlpha = isStopped ? 1 : 0.3 + 0.7 * Math.min(1, brakeIntensity);
-        ctx.fillStyle = '#F85149';
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 0.5;
-        
-        if (lane?.type !== 'LEFT' || isMoto) {
-          ctx.fillRect(-v.length / 2, leftLightY, lightW, lightL);
-          ctx.strokeRect(-v.length / 2, leftLightY, lightW, lightL);
-        }
-        if (!isMoto && lane?.type !== 'RIGHT') {
-          ctx.fillRect(-v.length / 2, rightLightY, lightW, lightL);
-          ctx.strokeRect(-v.length / 2, rightLightY, lightW, lightL);
-        }
-        ctx.globalAlpha = 1.0;
-      }
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
 
-      // Turn signals
-      if (Math.floor(time / 350) % 2 === 0) {
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 0.5;
-        ctx.fillStyle = '#FFD700'; // Yellow
-        if (lane?.type === 'LEFT') {
-          ctx.fillRect(-v.length / 2, leftLightY, lightW, lightL);
-          ctx.strokeRect(-v.length / 2, leftLightY, lightW, lightL);
-        } else if (lane?.type === 'RIGHT') {
-          ctx.fillRect(-v.length / 2, rightLightY, lightW, lightL);
-          ctx.strokeRect(-v.length / 2, rightLightY, lightW, lightL);
-        }
-      }
-      
+      renderVehicleSprite({
+        ctx,
+        v,
+        lane,
+        time,
+        isStopped,
+        isBraking,
+        brakeIntensity,
+      });
+
       ctx.restore();
     });
 
@@ -1550,13 +1563,40 @@ phase(4):
 
       {/* Center Area: Simulator Visual */}
       <main className="col-start-2 row-start-2 relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]">
-        <canvas 
-          ref={canvasRef} 
-          width={CANVAS_SIZE} 
-          height={CANVAS_SIZE}
-          className="box-border max-h-[min(70vh,100%)] max-w-[min(70vh,100%)] aspect-square w-full rounded border border-[#2D333B] shadow-2xl"
-        />
-        
+        <div className="absolute top-6 right-6 flex flex-col gap-2 z-20">
+          <button 
+            onClick={() => setZoom(z => Math.min(3, z + 0.1))}
+            className="p-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
+            title="Zoom In"
+          >
+            <Plus size={18} />
+          </button>
+          <button 
+            onClick={() => setZoom(z => Math.max(0.5, z - 0.1))}
+            className="p-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
+            title="Zoom Out"
+          >
+            <Minus size={18} />
+          </button>
+          <button 
+            onClick={() => setZoom(1)}
+            className="py-1 px-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[10px] font-mono text-[#8B949E] hover:text-white transition-all shadow-xl"
+          >
+            RESET
+          </button>
+        </div>
+        <div className="flex items-center justify-center w-full h-full overflow-auto">
+          <canvas 
+            ref={canvasRef} 
+            width={CANVAS_SIZE} 
+            height={CANVAS_SIZE}
+            style={{ 
+              transform: `scale(${zoom})`,
+              transition: 'transform 0.15s ease-out'
+            }}
+            className="box-border max-h-[min(70vh,100%)] max-w-[min(70vh,100%)] aspect-square w-full rounded border border-[#2D333B] shadow-2xl"
+          />
+        </div>
       </main>
     </div>
   );
