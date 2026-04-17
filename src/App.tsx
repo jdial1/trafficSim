@@ -7,18 +7,21 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, Clock, ChevronDown, ChevronRight, Activity } from 'lucide-react';
 import { Phase, Vehicle, Lane, LightState, PhaseTiming } from './types';
-import { CANVAS_SIZE, INTERSECTION_SIZE, LANE_WIDTH, LANES, DEFAULT_TIMINGS, DIRECTION_TO_PHASES, BASE_SPAWN_RATE, SPAWN_DRIFT_SPEED } from './constants';
+import { parseTrafficProgram, ProgrammedStage } from './interpreter';
+import { CANVAS_SIZE, INTERSECTION_SIZE, LANE_WIDTH, LANES, DEFAULT_TIMINGS, DEFAULT_STAGE_GREEN_SECONDS, DEFAULT_BUILTIN_STAGE_TIMINGS, BASE_SPAWN_RATE, SPAWN_DRIFT_SPEED, MIN_STAGE_GREEN_SECONDS, MAX_TOTAL_LOOP_SECONDS, clampStageTimingsToLoopCap } from './constants';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-const VEHICLE_SPEED = 2.5;
-const VEHICLE_ACCEL = 0.05;
-const VEHICLE_DECEL = 0.15;
-const SAFE_DISTANCE = 60;
+const VEHICLE_ACCEL = 0.08;
+const VEHICLE_DECEL = 0.2;
+const SAFE_DISTANCE = 55;
 const STOP_LINE = INTERSECTION_SIZE / 2 + 10;
+const LANE_MAP = new Map<string, Lane>(LANES.map(l => [l.id, l]));
+const VEHICLE_COLORS = ['#58A6FF', '#F85149', '#3FB950', '#D29922', '#8b5cf6', '#ec4899', '#ffcc00'];
 
 // Type definitions
 interface LogEntry { id: string; time: string; event: string; color?: string; }
 interface HistoryEntry { time: string; P1: number; P2: number; P3: number; P4: number; }
+interface QueueHistoryEntry { time: string; [key: string]: string | number; }
 
 // Memoized Sub-components to prevent flickering from frequent App re-renders
 const TrafficFlowRates = React.memo(({ rates }: { rates: Record<string, number> }) => (
@@ -36,9 +39,16 @@ const TrafficFlowRates = React.memo(({ rates }: { rates: Record<string, number> 
     </div>
 ));
 
+const CHART_H = 180;
+
 const AnalyticalChart = React.memo(({ history }: { history: HistoryEntry[] }) => (
     <div className="h-[180px] w-full mt-2 -ml-6" style={{ minWidth: 0 }}>
-        <ResponsiveContainer width="99%" height="100%" minWidth={0}>
+        <ResponsiveContainer
+            width="100%"
+            height={CHART_H}
+            minWidth={0}
+            initialDimension={{ width: 240, height: CHART_H }}
+        >
             <LineChart data={history} margin={{ left: 0, right: 0, top: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#2D333B" vertical={false} />
                 <XAxis dataKey="time" hide />
@@ -58,6 +68,52 @@ const AnalyticalChart = React.memo(({ history }: { history: HistoryEntry[] }) =>
             <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-[#58A6FF]"></span> P2</span>
             <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-[#D29922]"></span> P3</span>
             <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-[#8b5cf6]"></span> P4</span>
+        </div>
+    </div>
+));
+
+const QueueChart = React.memo(({ history }: { history: QueueHistoryEntry[] }) => (
+    <div className="h-[180px] w-full mt-2 -ml-6" style={{ minWidth: 0 }}>
+        <ResponsiveContainer
+            width="100%"
+            height={CHART_H}
+            minWidth={0}
+            initialDimension={{ width: 240, height: CHART_H }}
+        >
+            <LineChart data={history} margin={{ left: 0, right: 0, top: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2D333B" vertical={false} />
+                <XAxis dataKey="time" hide />
+                <YAxis hide domain={[0, 'auto']} />
+                <Tooltip 
+                    contentStyle={{ background: '#1A1D23', border: '1px solid #2D333B', fontSize: '10px' }}
+                    itemStyle={{ fontSize: '10px' }}
+                />
+                {LANES.map((lane, i) => {
+                    const colors = ['#58A6FF', '#F85149', '#3FB950', '#D29922', '#8b5cf6', '#ec4899', '#ffcc00', '#0366d6', '#28a745', '#ffd33d', '#ea4aaa', '#6f42c1'];
+                    return (
+                        <Line 
+                            key={lane.id}
+                            isAnimationActive={false} 
+                            type="monotone" 
+                            dataKey={lane.id} 
+                            stroke={colors[i % colors.length]} 
+                            strokeWidth={1} 
+                            dot={false} 
+                        />
+                    );
+                })}
+            </LineChart>
+        </ResponsiveContainer>
+        <div className="grid grid-cols-4 gap-x-2 gap-y-1 text-[7px] font-mono text-gray-500 -mt-2 ml-6 px-2">
+            {LANES.map((lane, i) => {
+                const colors = ['#58A6FF', '#F85149', '#3FB950', '#D29922', '#8b5cf6', '#ec4899', '#ffcc00', '#0366d6', '#28a745', '#ffd33d', '#ea4aaa', '#6f42c1'];
+                return (
+                    <span key={lane.id} className="flex items-center gap-1 truncate">
+                        <span className="w-1.5 h-0.5 shrink-0" style={{ backgroundColor: colors[i % colors.length] }}></span> 
+                        {lane.id.replace(/-/g, '_').toUpperCase()}
+                    </span>
+                );
+            })}
         </div>
     </div>
 ));
@@ -107,10 +163,7 @@ const CollapsibleSection = React.memo(({
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isPlaying, setIsPlaying] = useState(true);
-  const [timings, setTimings] = useState<Record<number, number>>({
-    1: 10, 2: 20, 3: 10, 4: 20,
-    5: 10, 6: 20, 7: 10, 8: 20,
-  });
+  const [stageTimings, setStageTimings] = useState<number[]>(() => [...DEFAULT_BUILTIN_STAGE_TIMINGS]);
   
   // Traffic Flow State
   const [trafficRates, setTrafficRates] = useState<Record<string, number>>({
@@ -121,24 +174,88 @@ export default function App() {
   
   // UI State
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
-    ring1: false,
-    ring2: false,
+    phaseTimings: false,
     queue: false,
     log: false,
     analytics: false,
-    flow: false
+    flow: false,
+    editor: false
   });
-  const [timingHistory, setTimingHistory] = useState<any[]>([]);
+  const [timingHistory, setTimingHistory] = useState<HistoryEntry[]>([]);
+  const [queueHistory, setQueueHistory] = useState<QueueHistoryEntry[]>([]);
   
   // Controller State
-  const [currentStage, setCurrentStage] = useState(0); // 0: 1&5, 1: 2&6, 2: 3&7, 3: 4&8
+  const [currentStage, setCurrentStage] = useState(0);
   const [lightState, setLightState] = useState<LightState>('GREEN');
   const [timer, setTimer] = useState(0);
   const [logs, setLogs] = useState<{ id: string, time: string, event: string, color?: string }[]>([]);
   
+  // Interpreter State
+  const [programCode, setProgramCode] = useState<string>(`phase(1):
+    NORTHBOUND_STRAIGHT.GO
+    SOUTHBOUND_STRAIGHT.GO
+    NORTHBOUND_RIGHT.GO
+    SOUTHBOUND_RIGHT.GO
+
+phase(2):
+    NORTHBOUND_LEFT.GO
+    SOUTHBOUND_LEFT.GO
+    WESTBOUND_RIGHT.GO
+    EASTBOUND_RIGHT.GO
+
+phase(3):
+    EASTBOUND_STRAIGHT.GO
+    WESTBOUND_STRAIGHT.GO
+    EASTBOUND_RIGHT.GO
+    WESTBOUND_RIGHT.GO
+
+phase(4):
+    EASTBOUND_LEFT.GO
+    WESTBOUND_LEFT.GO
+    EASTBOUND_RIGHT.GO
+    NORTHBOUND_RIGHT.GO
+    SOUTHBOUND_RIGHT.GO
+`);
+  const [compiledStages, setCompiledStages] = useState<ProgrammedStage[]>([]);
+  const [programError, setProgramError] = useState<string>('');
+
+  const compile = useCallback(() => {
+    const result = parseTrafficProgram(programCode);
+    if (result.error) {
+      setProgramError(result.error);
+    } else if (result.stages && result.stages.length > 0) {
+      setProgramError('');
+      setCompiledStages(result.stages);
+      const n = result.stages.length;
+      setStageTimings((prev) =>
+        clampStageTimingsToLoopCap(
+          Array.from({ length: n }, (_, i) => prev[i] ?? DEFAULT_STAGE_GREEN_SECONDS),
+          n,
+        ),
+      );
+      setCurrentStage(0);
+      setLightState('GREEN');
+      setTimer(0);
+    }
+  }, [programCode]);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      compile();
+    }, 500);
+    return () => clearTimeout(timeout);
+  }, [compile]);
+
   const vehiclesRef = useRef<Vehicle[]>([]);
+  const laneCarsCacheRef = useRef<Record<string, Vehicle[]>>({});
+  const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const requestRef = useRef<number>(null);
   const lastTimeRef = useRef<number>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    LANES.forEach(l => laneCarsCacheRef.current[l.id] = []);
+  }, []);
 
   const addLog = useCallback((event: string, color?: string) => {
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -153,15 +270,30 @@ export default function App() {
   // Helper to get active phases for current stage
   const getActivePhases = useCallback((stage: number) => {
     switch (stage) {
-      case 0: return [Phase.P1, Phase.P5];
-      case 1: return [Phase.P2, Phase.P6];
-      case 2: return [Phase.P3, Phase.P7];
-      case 3: return [Phase.P4, Phase.P8];
-      default: return [];
+      case 0:
+        return [Phase.NORTHBOUND_LEFT, Phase.SOUTHBOUND_LEFT];
+      case 1:
+        return [
+          Phase.NORTHBOUND_STRAIGHT,
+          Phase.NORTHBOUND_RIGHT,
+          Phase.SOUTHBOUND_STRAIGHT,
+          Phase.SOUTHBOUND_RIGHT,
+        ];
+      case 2:
+        return [Phase.WESTBOUND_LEFT, Phase.EASTBOUND_LEFT];
+      case 3:
+        return [
+          Phase.WESTBOUND_STRAIGHT,
+          Phase.WESTBOUND_RIGHT,
+          Phase.EASTBOUND_STRAIGHT,
+          Phase.EASTBOUND_RIGHT,
+        ];
+      default:
+        return [];
     }
   }, []);
 
-  const activePhases = getActivePhases(currentStage);
+  const activePhases = compiledStages.length > 0 ? (compiledStages[currentStage]?.phases || []) : getActivePhases(currentStage);
 
   // Traffic Flow Drift
   useEffect(() => {
@@ -179,49 +311,80 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isPlaying]);
 
-  // Adaptive Timing Logic
   useEffect(() => {
     if (!isPlaying || !isAdaptive) return;
     const interval = setInterval(() => {
-        const laneCounts: Record<number, number> = {};
-        LANES.forEach(l => {
-            const count = vehiclesRef.current.filter(v => v.laneId === l.id).length + (offScreenQueues[l.id] || 0);
-            laneCounts[l.phase] = (laneCounts[l.phase] || 0) + count;
-        });
+      const n = compiledStages.length > 0 ? compiledStages.length : 4;
+      const counts = new Array(n).fill(0);
+      const laneCounts = new Map<string, number>();
+      vehiclesRef.current.forEach(v => {
+        laneCounts.set(v.laneId, (laneCounts.get(v.laneId) || 0) + 1);
+      });
 
-        setTimings(prev => {
-            const next = { ...prev };
-            Object.keys(next).forEach(pStr => {
-                const p = parseInt(pStr);
-                const count = laneCounts[p] || 0;
-                // Aggressive heuristics: 1s extra green per 1 car, range 5-60
-                const targetGreen = Math.max(5, Math.min(60, 5 + Math.floor(count / 1.5)));
-                if (next[p] < targetGreen) next[p] += 2; // Ramps up faster
-                else if (next[p] > targetGreen) next[p] -= 1;
-            });
-            return next;
+      for (let i = 0; i < n; i++) {
+        const phasesInStage =
+          compiledStages.length > 0 ? compiledStages[i].phases : getActivePhases(i);
+        const phaseSet = new Set(phasesInStage);
+        LANES.forEach((l) => {
+          if (phaseSet.has(l.phase)) {
+            const onScreen = laneCounts.get(l.id) || 0;
+            const offScreen = offScreenQueues[l.id] || 0;
+            // Weigh off-screen cars at 1.5x to prioritize clearing backlogs
+            counts[i] += onScreen + (offScreen * 1.5);
+          }
         });
-    }, 2000); // More frequent updates
+      }
+      setStageTimings((prev) => {
+        const next = Array.from({ length: n }, (_, i) => prev[i] ?? DEFAULT_STAGE_GREEN_SECONDS);
+        for (let i = 0; i < n; i++) {
+          const c = counts[i] || 0;
+          // Calculation: 5s base + 2s per "weighted" vehicle
+          const targetGreen = Math.max(
+            MIN_STAGE_GREEN_SECONDS,
+            Math.min(MAX_TOTAL_LOOP_SECONDS / 2, MIN_STAGE_GREEN_SECONDS + Math.floor(c * 2))
+          );
+
+          const diff = targetGreen - next[i];
+          if (diff > 0) {
+            // Jump faster if the gap is large (Proportional adjustment)
+            next[i] += Math.ceil(diff * 0.4);
+          } else {
+            next[i] -= 1;
+          }
+        }
+        return clampStageTimingsToLoopCap(next, n);
+      });
+    }, 2000);
     return () => clearInterval(interval);
-  }, [isPlaying, isAdaptive, offScreenQueues]);
+  }, [isPlaying, isAdaptive, offScreenQueues, compiledStages, getActivePhases]);
 
-  // Record History for Chart
+  // Record History for Charts
   useEffect(() => {
     if (!isPlaying) return;
     const interval = setInterval(() => {
+        const timestamp = new Date().toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' });
+        
         setTimingHistory(prev => {
             const entry = {
-                time: new Date().toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' }),
-                P1: timings[1],
-                P2: timings[2],
-                P3: timings[3],
-                P4: timings[4]
+                time: timestamp,
+                P1: stageTimings[0] ?? DEFAULT_STAGE_GREEN_SECONDS,
+                P2: stageTimings[1] ?? DEFAULT_STAGE_GREEN_SECONDS,
+                P3: stageTimings[2] ?? DEFAULT_STAGE_GREEN_SECONDS,
+                P4: stageTimings[3] ?? DEFAULT_STAGE_GREEN_SECONDS,
             };
-            return [...prev, entry].slice(-20); // Keep last 20 samples
+            return [...prev, entry].slice(-20);
+        });
+
+        setQueueHistory(prev => {
+            const entry: QueueHistoryEntry = { time: timestamp };
+            LANES.forEach(lane => {
+                entry[lane.id] = offScreenQueues[lane.id] || 0;
+            });
+            return [...prev, entry].slice(-20);
         });
     }, 2000);
     return () => clearInterval(interval);
-  }, [isPlaying, timings]);
+  }, [isPlaying, stageTimings, offScreenQueues]);
 
   // Logic to update traffic lights
   useEffect(() => {
@@ -231,15 +394,13 @@ export default function App() {
       setTimer((prev) => {
         const next = prev + 0.1;
         
-        let currentMaxGreen = 0;
-        if (currentStage === 0) currentMaxGreen = Math.max(timings[1], timings[5]);
-        if (currentStage === 1) currentMaxGreen = Math.max(timings[2], timings[6]);
-        if (currentStage === 2) currentMaxGreen = Math.max(timings[3], timings[7]);
-        if (currentStage === 3) currentMaxGreen = Math.max(timings[4], timings[8]);
+        const sc = compiledStages.length > 0 ? compiledStages.length : 4;
+        const idx = currentStage % sc;
+        const currentMaxGreen = stageTimings[idx] ?? DEFAULT_STAGE_GREEN_SECONDS;
 
         if (lightState === 'GREEN' && next >= currentMaxGreen) {
           setLightState('YELLOW');
-          addLog(`PHASE ${activePhases[0]}&${activePhases[1]} YELLOW`, 'var(--yellow)');
+          addLog(`PHASE ${activePhases.join(' & ')} YELLOW`, 'var(--yellow)');
           return 0;
         }
         if (lightState === 'YELLOW' && next >= DEFAULT_TIMINGS.yellow) {
@@ -248,11 +409,18 @@ export default function App() {
           return 0;
         }
         if (lightState === 'RED' && next >= DEFAULT_TIMINGS.allRed) {
-          const nextStage = (currentStage + 1) % 4;
-          const nextPhases = getActivePhases(nextStage);
+          let nextStage = 0;
+          let nextPhases: Phase[] = [];
+          if (compiledStages.length > 0) {
+              nextStage = (currentStage + 1) % compiledStages.length;
+              nextPhases = compiledStages[nextStage]?.phases || [];
+          } else {
+              nextStage = (currentStage + 1) % 4;
+              nextPhases = getActivePhases(nextStage);
+          }
           setLightState('GREEN');
           setCurrentStage(nextStage);
-          addLog(`PHASE ${nextPhases[0]}&${nextPhases[1]} START`, 'var(--major)');
+          addLog(`PHASE ${nextPhases.join(' & ')} START`, 'var(--major)');
           return 0;
         }
         return next;
@@ -260,120 +428,120 @@ export default function App() {
     }, 100);
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentStage, lightState, timings, activePhases, addLog, getActivePhases]);
+  }, [isPlaying, currentStage, lightState, stageTimings, activePhases, addLog, getActivePhases, compiledStages]);
 
-  // Car Spawning and Queueing
+  // 1. TRAFFIC GENERATOR (PRODUCER)
+  // This only calculates demand and adds it to the off-screen queue.
+  // It NO LONGER spawns cars directly or checks road distance.
   useEffect(() => {
     if (!isPlaying) return;
-
     const interval = setInterval(() => {
-      LANES.forEach(lane => {
-        const rate = trafficRates[lane.direction];
-        if (Math.random() < rate) {
-            // Check if there is space to spawn at the edge
-            const carsInLane = vehiclesRef.current.filter(v => v.laneId === lane.id);
-            const edgeDist = carsInLane.reduce((minDist, v) => {
-                const d = Math.sqrt(Math.pow(v.x - lane.startX, 2) + Math.pow(v.y - lane.startY, 2));
-                return d < minDist ? d : minDist;
-            }, Infinity);
-
-            if (edgeDist > SAFE_DISTANCE) {
-                const colors = ['#58A6FF', '#F85149', '#3FB950', '#D29922', '#8b5cf6', '#ec4899', '#ffcc00'];
-                const startAngle = lane.direction === 'N' ? -Math.PI/2 : lane.direction === 'S' ? Math.PI/2 : lane.direction === 'E' ? 0 : Math.PI;
-                const rand = Math.random();
-                let speedType: 'NORMAL' | 'FAST' | 'SLOW' = 'NORMAL';
-                if (rand < 0.02) speedType = 'FAST';
-                else if (rand < 0.04) speedType = 'SLOW';
-
-                const newVehicle: Vehicle = {
-                  id: Math.random().toString(36).substr(2, 9),
-                  x: lane.startX,
-                  y: lane.startY,
-                  vx: 0,
-                  vy: 0,
-                  angle: startAngle,
-                  laneId: lane.id,
-                  color: colors[Math.floor(Math.random() * colors.length)],
-                  width: 18,
-                  length: 30,
-                  speedType,
-                };
-                vehiclesRef.current.push(newVehicle);
-            } else {
-                // Add to off-screen queue
-                setOffScreenQueues(prev => ({
-                    ...prev,
-                    [lane.id]: (prev[lane.id] || 0) + 1
-                }));
-            }
-        }
+      setOffScreenQueues(prev => {
+        const next = { ...prev };
+        let changed = false;
+        LANES.forEach(lane => {
+          const rate = trafficRates[lane.direction];
+          // If random roll succeeds, add a car to this lane's queue
+          if (Math.random() < rate) {
+            next[lane.id] = (next[lane.id] || 0) + 1;
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
       });
     }, 500);
-
     return () => clearInterval(interval);
   }, [isPlaying, trafficRates]);
 
-  // Pull from off-screen queues
+  // 2. QUEUE DRAINER / SPAWNER (CONSUMER)
+  // This is the ONLY place where cars are spawned onto the canvas.
+  // It checks if there's space and moves a car from the queue to the road.
   useEffect(() => {
     if (!isPlaying) return;
     const interval = setInterval(() => {
-        setOffScreenQueues(prev => {
-            const next = { ...prev };
-            let changed = false;
-            LANES.forEach(lane => {
-                if (next[lane.id] > 0) {
-                    const carsInLane = vehiclesRef.current.filter(v => v.laneId === lane.id);
-                    const edgeDist = carsInLane.reduce((minDist, v) => {
-                        const d = Math.sqrt(Math.pow(v.x - lane.startX, 2) + Math.pow(v.y - lane.startY, 2));
-                        return d < minDist ? d : minDist;
-                    }, Infinity);
-
-                    // Reduced spawn distance to allow more cars to enter
-                    if (edgeDist > 40) {
-                        const colors = ['#58A6FF', '#F85149', '#3FB950', '#D29922', '#8b5cf6', '#ec4899', '#ffcc00'];
-                        const startAngle = lane.direction === 'N' ? -Math.PI/2 : lane.direction === 'S' ? Math.PI/2 : lane.direction === 'E' ? 0 : Math.PI;
-                        const rand = Math.random();
-                        let speedType: 'NORMAL' | 'FAST' | 'SLOW' = 'NORMAL';
-                        if (rand < 0.02) speedType = 'FAST';
-                        else if (rand < 0.04) speedType = 'SLOW';
-
-                        const newVehicle: Vehicle = {
-                          id: Math.random().toString(36).substr(2, 9),
-                          x: lane.startX,
-                          y: lane.startY,
-                          vx: 0,
-                          vy: 0,
-                          angle: startAngle,
-                          laneId: lane.id,
-                          color: colors[Math.floor(Math.random() * colors.length)],
-                          width: 18,
-                          length: 30,
-                          speedType,
-                        };
-                        vehiclesRef.current.push(newVehicle);
-                        next[lane.id]--;
-                        changed = true;
-                    }
-                }
-            });
-            return changed ? next : prev;
+      setOffScreenQueues(prev => {
+        const next = { ...prev };
+        let changed = false;
+        const laneCars = new Map<string, Vehicle[]>();
+        vehiclesRef.current.forEach(v => {
+          let arr = laneCars.get(v.laneId);
+          if (!arr) {
+            arr = [];
+            laneCars.set(v.laneId, arr);
+          }
+          arr.push(v);
         });
-    }, 500);
+        
+        LANES.forEach(lane => {
+          // Only attempt to spawn if there's a backlog
+          if (next[lane.id] > 0) {
+            const carsInLane = laneCars.get(lane.id) || [];
+            
+            // Find distance to the closest car in this lane
+            const edgeDistSq = carsInLane.reduce((minDistSq, v) => {
+              const dx = v.x - lane.startX;
+              const dy = v.y - lane.startY;
+              const dSq = dx * dx + dy * dy;
+              return dSq < minDistSq ? dSq : minDistSq;
+            }, Infinity);
+
+            // Logic optimization: If the car ahead is moving, reduce the required distance to enter
+            const currentLaneSpeed = carsInLane.length > 0 ? Math.abs(carsInLane[0].vy || carsInLane[0].vx) : 0;
+            const dynamicEntryDist = currentLaneSpeed > 1 ? SAFE_DISTANCE * 0.6 : SAFE_DISTANCE;
+
+            // If the entrance is clear (dynamic), move car from queue to road
+            if (edgeDistSq > dynamicEntryDist * dynamicEntryDist) {
+              const startAngle = lane.direction === 'N' ? -Math.PI/2 : lane.direction === 'S' ? Math.PI/2 : lane.direction === 'E' ? 0 : Math.PI;
+              
+              const newVehicle: Vehicle = {
+                id: Math.random().toString(36).substr(2, 9),
+                x: lane.startX,
+                y: lane.startY,
+                vx: 0,
+                vy: 0,
+                angle: startAngle,
+                laneId: lane.id,
+                color: VEHICLE_COLORS[Math.floor(Math.random() * VEHICLE_COLORS.length)],
+                width: 18,
+                length: 30,
+                cruiseSpeed: 2.5 + Math.random(),
+                startDelay: 0.1 + Math.random() * 0.3,
+                spawnAtMs: performance.now(),
+              };
+
+              vehiclesRef.current.push(newVehicle);
+              next[lane.id]--; // Decrement the overflow count
+              changed = true;
+            }
+          }
+        });
+        return changed ? next : prev;
+      });
+    }, 150); // High frequency check ensures cars spawn as soon as there is a gap
     return () => clearInterval(interval);
   }, [isPlaying]);
 
-  const update = useCallback(() => {
+  const update = useCallback((time: number) => {
     const vehicles = vehiclesRef.current;
     
+    // Pre-bucket vehicles by lane for O(1) collision candidate lookups (no allocations)
+    const laneCars = laneCarsCacheRef.current;
+    for (const k in laneCars) laneCars[k].length = 0;
+    for (let i = 0; i < vehicles.length; i++) {
+      const v = vehicles[i];
+      if (laneCars[v.laneId]) laneCars[v.laneId].push(v);
+    }
+
     vehicles.forEach((v) => {
-      const lane = LANES.find(l => l.id === v.laneId)!;
+      const lane = LANE_MAP.get(v.laneId)!;
       const isGreen = activePhases.includes(lane.phase) && lightState === 'GREEN';
       const isYellow = activePhases.includes(lane.phase) && lightState === 'YELLOW';
       
       // Target Speed
-      let targetSpeed = VEHICLE_SPEED;
-      if (v.speedType === 'FAST') targetSpeed *= 1.4;
-      if (v.speedType === 'SLOW') targetSpeed *= 0.6;
+      let targetSpeed = v.cruiseSpeed;
+      if (time - v.spawnAtMs < v.startDelay * 1000) {
+        targetSpeed = 0;
+      }
       
       // Distance to intersection stop line
       let distToStop = Infinity;
@@ -392,35 +560,48 @@ export default function App() {
       }
 
       // Car following logic
-      const carAhead = vehicles.filter(other => 
-        other.id !== v.id && 
-        // Logic for identifying potential collisions
-        ((other.laneId === v.laneId && (!v.isTurning ? !other.isTurning : true)) || 
-         (v.isTurning && other.isTurning))
-      ).find(other => {
-          if (v.isTurning && other.isTurning) {
-              const dx = other.x - v.x;
-              const dy = other.y - v.y;
-              const dist = Math.sqrt(dx*dx + dy*dy);
-              // Same lane turned, check if other is ahead in progress
-              if (other.laneId === v.laneId) {
-                  return dist < SAFE_DISTANCE && (other.turnProgress ?? 0) > (v.turnProgress ?? 0);
-              }
-              // Different lanes turning (intersection conflict)
-              // We use a tighter safe distance for different lanes to allow tight turns
-              return dist < SAFE_DISTANCE * 0.7;
+      let carAhead: Vehicle | undefined = undefined;
+      const candidates = v.isTurning ? vehicles : (laneCars[v.laneId] || []);
+      for (let i = 0; i < candidates.length; i++) {
+        const other = candidates[i];
+        if (other.id === v.id) continue;
+        if (other.laneId !== v.laneId && !(v.isTurning && other.isTurning)) continue;
+
+        if (v.isTurning && other.isTurning) {
+          const dx = other.x - v.x;
+          const dy = other.y - v.y;
+          const distSq = dx * dx + dy * dy;
+          if (other.laneId === v.laneId) {
+            if (distSq < SAFE_DISTANCE * SAFE_DISTANCE && (other.turnProgress ?? 0) > (v.turnProgress ?? 0)) {
+              carAhead = other;
+              break;
+            }
+          } else {
+            if (distSq < (SAFE_DISTANCE * 0.7) * (SAFE_DISTANCE * 0.7)) {
+              carAhead = other;
+              break;
+            }
           }
-          
-          if (lane.direction === 'N') return other.y < v.y && (v.y - other.y) < SAFE_DISTANCE;
-          if (lane.direction === 'S') return other.y > v.y && (other.y - v.y) < SAFE_DISTANCE;
-          if (lane.direction === 'E') return other.x > v.x && (other.x - v.x) < SAFE_DISTANCE;
-          if (lane.direction === 'W') return other.x < v.x && (v.x - other.x) < SAFE_DISTANCE;
-          return false;
-      });
+          continue;
+        }
+
+        if (lane.direction === 'N' && other.y < v.y && (v.y - other.y) < SAFE_DISTANCE) { carAhead = other; break; }
+        if (lane.direction === 'S' && other.y > v.y && (other.y - v.y) < SAFE_DISTANCE) { carAhead = other; break; }
+        if (lane.direction === 'E' && other.x > v.x && (other.x - v.x) < SAFE_DISTANCE) { carAhead = other; break; }
+        if (lane.direction === 'W' && other.x < v.x && (v.x - other.x) < SAFE_DISTANCE) { carAhead = other; break; }
+      }
 
       if (carAhead) {
+        const dx = carAhead.x - v.x;
+        const dy = carAhead.y - v.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
         const otherSpeed = Math.sqrt(carAhead.vx * carAhead.vx + carAhead.vy * carAhead.vy);
-        targetSpeed = Math.min(targetSpeed, otherSpeed);
+        
+        if (dist < SAFE_DISTANCE * 0.7) {
+          targetSpeed = Math.min(targetSpeed, otherSpeed * 0.5);
+        } else {
+          targetSpeed = Math.min(targetSpeed, otherSpeed);
+        }
         if (targetSpeed < 0.1) targetSpeed = 0;
       }
 
@@ -431,6 +612,12 @@ export default function App() {
       else if (currentSpeed > targetSpeed) accel = -VEHICLE_DECEL;
 
       const newSpeed = Math.max(0, currentSpeed + accel);
+      
+      if (newSpeed < currentSpeed - 0.001) {
+          v.brakeIntensity = Math.min(1, (currentSpeed - newSpeed) / VEHICLE_DECEL);
+      } else {
+          v.brakeIntensity = 0;
+      }
       
       if (newSpeed > 0.1) {
           v.angle = Math.atan2(v.vy, v.vx);
@@ -480,7 +667,7 @@ export default function App() {
                     v.turnCenterY = centerY + 120;
                     v.turnRadius = 20;
                     v.turnAngleStart = Math.PI;
-                    v.turnAngleEnd = -Math.PI / 2;
+                    v.turnAngleEnd = Math.PI * 1.5;
                     shouldStart = true;
                 } else if (lane.direction === 'S' && v.y >= centerY - 120) {
                     v.turnCenterX = centerX - 120;
@@ -554,90 +741,200 @@ export default function App() {
       }
     });
 
-    // Remove cars out of bounds
-    vehiclesRef.current = vehicles.filter(v => v.x >= -50 && v.x <= CANVAS_SIZE + 50 && v.y >= -50 && v.y <= CANVAS_SIZE + 50);
+    // In-place filter to heavily reduce garbage collection thrashing
+    let validCount = 0;
+    for (let i = 0; i < vehicles.length; i++) {
+      const v = vehicles[i];
+      if (v.x >= -50 && v.x <= CANVAS_SIZE + 50 && v.y >= -50 && v.y <= CANVAS_SIZE + 50) {
+        vehicles[validCount++] = v;
+      }
+    }
+    vehicles.length = validCount;
   }, [activePhases, lightState]);
 
-  const draw = useCallback((ctx: CanvasRenderingContext2D) => {
+  const draw = useCallback((ctx: CanvasRenderingContext2D, time: number) => {
     ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
     const centerX = CANVAS_SIZE / 2;
     const centerY = CANVAS_SIZE / 2;
 
-    // Draw Roads
-    ctx.fillStyle = '#1A1D23';
-    // Vertical Road
-    ctx.fillRect(centerX - INTERSECTION_SIZE / 2, 0, INTERSECTION_SIZE, CANVAS_SIZE);
-    // Horizontal Road
-    ctx.fillRect(0, centerY - INTERSECTION_SIZE / 2, CANVAS_SIZE, INTERSECTION_SIZE);
+    if (!bgCanvasRef.current) {
+      const bg = document.createElement('canvas');
+      bg.width = CANVAS_SIZE; bg.height = CANVAS_SIZE;
+      const bCtx = bg.getContext('2d');
+      if (bCtx) {
+        bCtx.fillStyle = '#1A1D23';
+        bCtx.fillRect(centerX - INTERSECTION_SIZE / 2, 0, INTERSECTION_SIZE, CANVAS_SIZE);
+        bCtx.fillRect(0, centerY - INTERSECTION_SIZE / 2, CANVAS_SIZE, INTERSECTION_SIZE);
+        bCtx.fillStyle = '#0D0F12';
+        bCtx.fillRect(centerX - INTERSECTION_SIZE / 2, centerY - INTERSECTION_SIZE / 2, INTERSECTION_SIZE, INTERSECTION_SIZE);
+        bCtx.strokeStyle = '#2D333B';
+        bCtx.lineWidth = 1;
 
-    // Intersection Box
-    ctx.fillStyle = '#0D0F12';
-    ctx.fillRect(centerX - INTERSECTION_SIZE / 2, centerY - INTERSECTION_SIZE / 2, INTERSECTION_SIZE, INTERSECTION_SIZE);
+        const drawLaneMarkers = (x: number, y: number, length: number, horizontal: boolean) => {
+          if (horizontal) {
+            bCtx.moveTo(x, y); bCtx.lineTo(x + length, y);
+          } else {
+            bCtx.moveTo(x, y); bCtx.lineTo(x, y + length);
+          }
+        };
 
-    // Lane Lines
-    ctx.strokeStyle = '#2D333B';
-    ctx.lineWidth = 1;
-    
-    const drawLaneMarkers = (x: number, y: number, length: number, horizontal: boolean) => {
-        ctx.setLineDash([20, 20]);
+        bCtx.setLineDash([]);
+        bCtx.lineWidth = 2;
+        bCtx.strokeStyle = '#444c56';
+        bCtx.beginPath();
+        bCtx.moveTo(centerX - 2, 0); bCtx.lineTo(centerX - 2, centerY - INTERSECTION_SIZE / 2);
+        bCtx.moveTo(centerX + 2, 0); bCtx.lineTo(centerX + 2, centerY - INTERSECTION_SIZE / 2);
+        bCtx.moveTo(centerX - 2, centerY + INTERSECTION_SIZE / 2); bCtx.lineTo(centerX - 2, CANVAS_SIZE);
+        bCtx.moveTo(centerX + 2, centerY + INTERSECTION_SIZE / 2); bCtx.lineTo(centerX + 2, CANVAS_SIZE);
+        bCtx.moveTo(0, centerY - 2); bCtx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY - 2);
+        bCtx.moveTo(0, centerY + 2); bCtx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY + 2);
+        bCtx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY - 2); bCtx.lineTo(CANVAS_SIZE, centerY - 2);
+        bCtx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY + 2); bCtx.lineTo(CANVAS_SIZE, centerY + 2);
+        bCtx.stroke();
+
+        bCtx.strokeStyle = '#2D333B';
+        bCtx.lineWidth = 1;
+        bCtx.setLineDash([20, 20]);
+        bCtx.beginPath();
+        [LANE_WIDTH, LANE_WIDTH * 2].forEach(offset => {
+          drawLaneMarkers(centerX + offset, 0, centerY - INTERSECTION_SIZE / 2, false);
+          drawLaneMarkers(centerX - offset, 0, centerY - INTERSECTION_SIZE / 2, false);
+          drawLaneMarkers(centerX + offset, centerY + INTERSECTION_SIZE / 2, CANVAS_SIZE - (centerY + INTERSECTION_SIZE / 2), false);
+          drawLaneMarkers(centerX - offset, centerY + INTERSECTION_SIZE / 2, CANVAS_SIZE - (centerY + INTERSECTION_SIZE / 2), false);
+          drawLaneMarkers(0, centerY + offset, centerX - INTERSECTION_SIZE / 2, true);
+          drawLaneMarkers(0, centerY - offset, centerX - INTERSECTION_SIZE / 2, true);
+          drawLaneMarkers(centerX + INTERSECTION_SIZE / 2, centerY + offset, CANVAS_SIZE - (centerX + INTERSECTION_SIZE / 2), true);
+          drawLaneMarkers(centerX + INTERSECTION_SIZE / 2, centerY - offset, CANVAS_SIZE - (centerX + INTERSECTION_SIZE / 2), true);
+        });
+        bCtx.stroke();
+
+        bCtx.setLineDash([]);
+        bCtx.lineWidth = 2;
+        bCtx.strokeStyle = '#2D333B';
+        bCtx.beginPath();
+        bCtx.moveTo(centerX - INTERSECTION_SIZE / 2, centerY - STOP_LINE); bCtx.lineTo(centerX + INTERSECTION_SIZE / 2, centerY - STOP_LINE);
+        bCtx.moveTo(centerX - INTERSECTION_SIZE / 2, centerY + STOP_LINE); bCtx.lineTo(centerX + INTERSECTION_SIZE / 2, centerY + STOP_LINE);
+        bCtx.moveTo(centerX - STOP_LINE, centerY - INTERSECTION_SIZE / 2); bCtx.lineTo(centerX - STOP_LINE, centerY + INTERSECTION_SIZE / 2);
+        bCtx.moveTo(centerX + STOP_LINE, centerY - INTERSECTION_SIZE / 2); bCtx.lineTo(centerX + STOP_LINE, centerY + INTERSECTION_SIZE / 2);
+        bCtx.stroke();
+
+        const drawRoadArrow = (x: number, y: number, angle: number, icon: string) => {
+          bCtx.save();
+          bCtx.translate(x, y);
+          bCtx.rotate(angle);
+          bCtx.fillStyle = '#FFFFFF';
+          bCtx.font = '700 24px "Material Symbols Outlined"';
+          bCtx.textAlign = 'center';
+          bCtx.textBaseline = 'middle';
+          bCtx.fillText(icon, 0, 0);
+          bCtx.restore();
+        };
+
+        const drawStaticLabel = (label: string, x: number, y: number) => {
+          bCtx.fillStyle = '#FFFFFF';
+          bCtx.textAlign = 'left';
+          bCtx.textBaseline = 'top';
+          bCtx.font = 'bold 12px "JetBrains Mono"';
+          bCtx.fillText(label, x, y);
+        };
+
+        drawStaticLabel('NORTHBOUND', centerX + INTERSECTION_SIZE / 2 + 20, CANVAS_SIZE - 60);
+        drawStaticLabel('SOUTHBOUND', centerX - INTERSECTION_SIZE / 2 - 140, 40);
+        drawStaticLabel('EASTBOUND', 40, centerY + INTERSECTION_SIZE / 2 + 20);
+        drawStaticLabel('WESTBOUND', CANVAS_SIZE - 160, centerY - INTERSECTION_SIZE / 2 - 40);
+
+        drawRoadArrow(centerX + 20, centerY + 170, 0, 'turn_left');
+        drawRoadArrow(centerX + 60, centerY + 170, 0, 'arrow_upward');
+        drawRoadArrow(centerX + 100, centerY + 170, 0, 'turn_right');
+        drawRoadArrow(centerX - 20, centerY - 170, Math.PI, 'turn_left');
+        drawRoadArrow(centerX - 60, centerY - 170, Math.PI, 'arrow_upward');
+        drawRoadArrow(centerX - 100, centerY - 170, Math.PI, 'turn_right');
+        drawRoadArrow(centerX - 170, centerY + 20, Math.PI/2, 'turn_left');
+        drawRoadArrow(centerX - 170, centerY + 60, Math.PI/2, 'arrow_upward');
+        drawRoadArrow(centerX - 170, centerY + 100, Math.PI/2, 'turn_right');
+        drawRoadArrow(centerX + 170, centerY - 20, -Math.PI/2, 'turn_left');
+        drawRoadArrow(centerX + 170, centerY - 60, -Math.PI/2, 'arrow_upward');
+        drawRoadArrow(centerX + 170, centerY - 100, -Math.PI/2, 'turn_right');
+      }
+      bgCanvasRef.current = bg;
+    }
+
+    ctx.drawImage(bgCanvasRef.current, 0, 0);
+
+    const drawSignal = (x: number, y: number, angle: number, phases: Phase[], isLeft: boolean = false) => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+
+      const isActive = phases.some(p => activePhases.includes(p));
+      const currentHeadState = isActive ? lightState : 'RED';
+
+      // Housing
+      ctx.fillStyle = '#1A1D23';
+      ctx.strokeStyle = '#2D333B';
+      ctx.lineWidth = 1;
+      
+      const housingWidth = 16;
+      const housingHeight = 46;
+      ctx.fillRect(-housingWidth / 2, -housingHeight / 2, housingWidth, housingHeight);
+      ctx.strokeRect(-housingWidth / 2, -housingHeight / 2, housingWidth, housingHeight);
+
+      // Lights positions (Flip order for horizontal signals as per user request)
+      const isHorizontal = Math.abs(angle % Math.PI) > 0.1 && Math.abs(angle % Math.PI) < Math.PI - 0.1;
+
+      const drawLight = (state: string, color: string, offColor: string, posY: number) => {
+        const isOn = currentHeadState === state;
+        ctx.fillStyle = isOn ? color : offColor;
         ctx.beginPath();
-        if (horizontal) {
-            ctx.moveTo(x, y); ctx.lineTo(x + length, y);
-        } else {
-            ctx.moveTo(x, y); ctx.lineTo(x, y + length);
+        ctx.arc(0, posY, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (isOn) {
+            ctx.globalAlpha = 0.4;
+            ctx.beginPath();
+            ctx.arc(0, posY, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
         }
-        ctx.stroke();
+
+        if (isLeft) {
+            // Draw small arrow inside the light
+            ctx.strokeStyle = isOn ? '#FFFFFF' : 'rgba(255,255,255,0.1)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(1.5, posY); ctx.lineTo(-1.5, posY);
+            ctx.lineTo(0.5, posY - 2); ctx.moveTo(-1.5, posY);
+            ctx.lineTo(0.5, posY + 2);
+            ctx.stroke();
+        }
+      };
+
+      drawLight('RED', '#F85149', '#301010', isHorizontal ? 14 : -14);
+      drawLight('YELLOW', '#D29922', '#201800', 0);
+      drawLight('GREEN', '#3FB950', '#001800', isHorizontal ? -14 : 14);
+
+      ctx.restore();
     };
 
-    // Centerlines (Double Solid)
-    ctx.setLineDash([]);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#444c56';
-    // Vertical centerline
-    ctx.beginPath();
-    ctx.moveTo(centerX - 2, 0); ctx.lineTo(centerX - 2, centerY - INTERSECTION_SIZE / 2);
-    ctx.moveTo(centerX + 2, 0); ctx.lineTo(centerX + 2, centerY - INTERSECTION_SIZE / 2);
-    ctx.moveTo(centerX - 2, centerY + INTERSECTION_SIZE / 2); ctx.lineTo(centerX - 2, CANVAS_SIZE);
-    ctx.moveTo(centerX + 2, centerY + INTERSECTION_SIZE / 2); ctx.lineTo(centerX + 2, CANVAS_SIZE);
-    // Horizontal centerline
-    ctx.moveTo(0, centerY - 2); ctx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY - 2);
-    ctx.moveTo(0, centerY + 2); ctx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY + 2);
-    ctx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY - 2); ctx.lineTo(CANVAS_SIZE, centerY - 2);
-    ctx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY + 2); ctx.lineTo(CANVAS_SIZE, centerY + 2);
-    ctx.stroke();
+    const drawDynamicQueue = (prefix: string, x: number, y: number) => {
+      const qL = offScreenQueues[prefix + '-left'] || 0;
+      const qT = offScreenQueues[prefix + '-thru'] || 0;
+      const qR = offScreenQueues[prefix + '-right'] || 0;
 
-    // Lane separators
-    ctx.strokeStyle = '#2D333B';
-    ctx.lineWidth = 1;
-    [LANE_WIDTH, LANE_WIDTH * 2].forEach(offset => {
-        // Vertical separators
-        drawLaneMarkers(centerX + offset, 0, centerY - INTERSECTION_SIZE / 2, false);
-        drawLaneMarkers(centerX - offset, 0, centerY - INTERSECTION_SIZE / 2, false);
-        drawLaneMarkers(centerX + offset, centerY + INTERSECTION_SIZE / 2, CANVAS_SIZE - (centerY + INTERSECTION_SIZE / 2), false);
-        drawLaneMarkers(centerX - offset, centerY + INTERSECTION_SIZE / 2, CANVAS_SIZE - (centerY + INTERSECTION_SIZE / 2), false);
-        
-        // Horizontal separators
-        drawLaneMarkers(0, centerY + offset, centerX - INTERSECTION_SIZE / 2, true);
-        drawLaneMarkers(0, centerY - offset, centerX - INTERSECTION_SIZE / 2, true);
-        drawLaneMarkers(centerX + INTERSECTION_SIZE / 2, centerY + offset, CANVAS_SIZE - (centerX + INTERSECTION_SIZE / 2), true);
-        drawLaneMarkers(centerX + INTERSECTION_SIZE / 2, centerY - offset, CANVAS_SIZE - (centerX + INTERSECTION_SIZE / 2), true);
-    });
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.font = '12px "JetBrains Mono"';
+      ctx.fillStyle = (qL > 0 || qT > 0 || qR > 0) ? '#FFFFFF' : '#8B949E';
+      ctx.fillText(`L:+${qL} T:+${qT} R:+${qR}`, x, y + 16);
+    };
 
-    // Solid Stop Lines
-    ctx.setLineDash([]);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#2D333B';
-    
-    // Stop lines
-    ctx.beginPath();
-    ctx.moveTo(centerX - INTERSECTION_SIZE / 2, centerY - STOP_LINE); ctx.lineTo(centerX + INTERSECTION_SIZE / 2, centerY - STOP_LINE);
-    ctx.moveTo(centerX - INTERSECTION_SIZE / 2, centerY + STOP_LINE); ctx.lineTo(centerX + INTERSECTION_SIZE / 2, centerY + STOP_LINE);
-    ctx.moveTo(centerX - STOP_LINE, centerY - INTERSECTION_SIZE / 2); ctx.lineTo(centerX - STOP_LINE, centerY + INTERSECTION_SIZE / 2);
-    ctx.moveTo(centerX + STOP_LINE, centerY - INTERSECTION_SIZE / 2); ctx.lineTo(centerX + STOP_LINE, centerY + INTERSECTION_SIZE / 2);
-    ctx.stroke();
+    drawDynamicQueue('nb', centerX + INTERSECTION_SIZE / 2 + 20, CANVAS_SIZE - 60);
+    drawDynamicQueue('sb', centerX - INTERSECTION_SIZE / 2 - 140, 40);
+    drawDynamicQueue('eb', 40, centerY + INTERSECTION_SIZE / 2 + 20);
+    drawDynamicQueue('wb', CANVAS_SIZE - 160, centerY - INTERSECTION_SIZE / 2 - 40);
 
-    // Draw Vehicles
+    // 2. Draw Vehicles (Middle Layer)
     vehiclesRef.current.forEach(v => {
       ctx.save();
       ctx.translate(v.x, v.y);
@@ -645,111 +942,81 @@ export default function App() {
       
       // Car body
       ctx.fillStyle = v.color;
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.roundRect(-v.length / 2, -v.width / 2, v.length, v.width, 2);
       ctx.fill();
+      ctx.stroke();
 
-      // Tail lights if braking
-      if (Math.abs(v.vx) < 0.1 && Math.abs(v.vy) < 0.1) {
+      const lane = LANE_MAP.get(v.laneId);
+      
+      // Tail lights if braking or stopped
+      const isStopped = Math.abs(v.vx) < 0.1 && Math.abs(v.vy) < 0.1;
+      const brakeIntensity = v.brakeIntensity || 0;
+      if (isStopped || brakeIntensity > 0) {
+        ctx.globalAlpha = isStopped ? 1 : 0.3 + 0.7 * Math.min(1, brakeIntensity);
         ctx.fillStyle = '#F85149';
-        ctx.fillRect(-v.length / 2, -v.width / 2, 2, 4);
-        ctx.fillRect(-v.length / 2, v.width / 2 - 4, 2, 4);
-      }
-
-      // Speed Type Icon
-      if (v.speedType === 'FAST') {
-          ctx.fillStyle = '#FFD700'; // Gold
-          ctx.beginPath();
-          ctx.moveTo(0, -4); ctx.lineTo(4, 0); ctx.lineTo(0, 4); ctx.lineTo(-4, 0); ctx.fill();
-      } else if (v.speedType === 'SLOW') {
-          ctx.fillStyle = '#8B949E'; // Muted Gray
-          ctx.beginPath();
-          ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
-      }
-      
-      ctx.restore();
-    });
-
-    // Draw Signal Lights
-    const drawSignal = (x: number, y: number, angle: number, phases: Phase[], isLeft: boolean = false) => {
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(angle);
-
-      const isActive = phases.some(p => activePhases.includes(p));
-      const color = isActive ? (lightState === 'GREEN' ? '#3FB950' : lightState === 'YELLOW' ? '#D29922' : '#F85149') : '#F85149';
-
-      // Housing
-      ctx.fillStyle = '#1A1D23';
-      ctx.strokeStyle = '#2D333B';
-      ctx.lineWidth = 1;
-      
-      if (isLeft) {
-          // 4-light stack for left turns
-          ctx.fillRect(-8, -25, 16, 50);
-          ctx.strokeRect(-8, -25, 16, 50);
-          
-          // Draw a small arrow indicator
-          ctx.fillStyle = color;
-          ctx.beginPath();
-          ctx.moveTo(-3, 0); ctx.lineTo(3, 0); ctx.lineTo(0, -4); ctx.fill();
-      } else {
-          ctx.fillRect(-8, -20, 16, 40);
-          ctx.strokeRect(-8, -20, 16, 40);
-      }
-
-      // Simple light indicator
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(0, 0, 6, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.restore();
-    };
-
-    // Signal Heads
-    // Northbound
-    // Draw Off-screen Queues
-    LANES.forEach(lane => {
-        const qCount = offScreenQueues[lane.id] || 0;
-        if (qCount > 0) {
-            ctx.fillStyle = '#F85149';
-            ctx.font = '12px "JetBrains Mono"';
-            ctx.textAlign = 'center';
-            if (lane.direction === 'N') ctx.fillText(`+${qCount}`, lane.startX, CANVAS_SIZE - 20);
-            if (lane.direction === 'S') ctx.fillText(`+${qCount}`, lane.startX, 20);
-            if (lane.direction === 'E') ctx.fillText(`+${qCount}`, 20, lane.startY + 4);
-            if (lane.direction === 'W') ctx.fillText(`+${qCount}`, CANVAS_SIZE - 20, lane.startY + 4);
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 0.5;
+        if (lane?.type !== 'LEFT') {
+            ctx.fillRect(-v.length / 2, -v.width / 2, 2, 4);
+            ctx.strokeRect(-v.length / 2, -v.width / 2, 2, 4);
         }
+        if (lane?.type !== 'RIGHT') {
+            ctx.fillRect(-v.length / 2, v.width / 2 - 4, 2, 4);
+            ctx.strokeRect(-v.length / 2, v.width / 2 - 4, 2, 4);
+        }
+        ctx.globalAlpha = 1.0;
+      }
+
+      // Turn signals
+      if (Math.floor(time / 350) % 2 === 0) {
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 0.5;
+          if (lane?.type === 'LEFT') {
+              ctx.fillStyle = '#FFD700'; // Yellow
+              ctx.beginPath();
+              ctx.arc(-v.length / 2 + 2, -v.width / 2 + 2, 2, 0, Math.PI * 2); // rear-left
+              ctx.fill();
+              ctx.stroke();
+          } else if (lane?.type === 'RIGHT') {
+              ctx.fillStyle = '#FFD700'; // Yellow
+              ctx.beginPath();
+              ctx.arc(-v.length / 2 + 2, v.width / 2 - 2, 2, 0, Math.PI * 2); // rear-right
+              ctx.fill();
+              ctx.stroke();
+          }
+      }
+      
+      ctx.restore();
     });
 
-    drawSignal(centerX + 100, centerY + 130, 0, [Phase.P2]); // Right
-    drawSignal(centerX + 60, centerY + 130, 0, [Phase.P2]); // Thru
-    drawSignal(centerX + 20, centerY + 130, 0, [Phase.P1], true); // Left
+    // 3. Signal Lights (Top Layer)
+    drawSignal(centerX + 100, centerY + 130, 0, [Phase.NORTHBOUND_RIGHT]);
+    drawSignal(centerX + 60, centerY + 130, 0, [Phase.NORTHBOUND_STRAIGHT]);
+    drawSignal(centerX + 20, centerY + 130, 0, [Phase.NORTHBOUND_LEFT], true);
     
-    // Southbound
-    drawSignal(centerX - 100, centerY - 130, Math.PI, [Phase.P6]); // Right
-    drawSignal(centerX - 60, centerY - 130, Math.PI, [Phase.P6]); // Thru
-    drawSignal(centerX - 20, centerY - 130, Math.PI, [Phase.P5], true); // Left
+    drawSignal(centerX - 100, centerY - 130, Math.PI, [Phase.SOUTHBOUND_RIGHT]);
+    drawSignal(centerX - 60, centerY - 130, Math.PI, [Phase.SOUTHBOUND_STRAIGHT]);
+    drawSignal(centerX - 20, centerY - 130, Math.PI, [Phase.SOUTHBOUND_LEFT], true);
     
-    // Eastbound
-    drawSignal(centerX - 130, centerY + 100, -Math.PI/2, [Phase.P8]); // Right
-    drawSignal(centerX - 130, centerY + 60, -Math.PI/2, [Phase.P8]); // Thru
-    drawSignal(centerX - 130, centerY + 20, -Math.PI/2, [Phase.P7], true); // Left
+    drawSignal(centerX - 130, centerY + 100, -Math.PI/2, [Phase.EASTBOUND_RIGHT]);
+    drawSignal(centerX - 130, centerY + 60, -Math.PI/2, [Phase.EASTBOUND_STRAIGHT]);
+    drawSignal(centerX - 130, centerY + 20, -Math.PI/2, [Phase.EASTBOUND_LEFT], true);
     
-    // Westbound
-    drawSignal(centerX + 130, centerY - 100, Math.PI/2, [Phase.P4]); // Right
-    drawSignal(centerX + 130, centerY - 60, Math.PI/2, [Phase.P4]); // Thru
-    drawSignal(centerX + 130, centerY - 20, Math.PI/2, [Phase.P3], true); // Left
+    drawSignal(centerX + 130, centerY - 100, Math.PI/2, [Phase.WESTBOUND_RIGHT]);
+    drawSignal(centerX + 130, centerY - 60, Math.PI/2, [Phase.WESTBOUND_STRAIGHT]);
+    drawSignal(centerX + 130, centerY - 20, Math.PI/2, [Phase.WESTBOUND_LEFT], true);
 
-  }, [activePhases, lightState]);
+  }, [activePhases, lightState, offScreenQueues]);
 
   const loop = useCallback((time: number) => {
     if (lastTimeRef.current !== null && isPlaying) {
-      update();
+      update(time);
     }
     const ctx = canvasRef.current?.getContext('2d');
-    if (ctx) draw(ctx);
+    if (ctx) draw(ctx, time);
     
     lastTimeRef.current = time;
     requestRef.current = requestAnimationFrame(loop);
@@ -762,18 +1029,23 @@ export default function App() {
     };
   }, [loop]);
 
-  const handleTimingChange = (phase: number, val: number) => {
-    setTimings(prev => ({ ...prev, [phase]: val }));
+  const handleStageTimingChange = (stageIndex: number, val: number) => {
+    setStageTimings((prev) => {
+      const sc = compiledStages.length > 0 ? compiledStages.length : 4;
+      const next = Array.from({ length: sc }, (_, i) => prev[i] ?? DEFAULT_STAGE_GREEN_SECONDS);
+      const sumOthers = next.reduce((a, v, j) => (j === stageIndex ? a : a + v), 0);
+      const cap = MAX_TOTAL_LOOP_SECONDS - sumOthers;
+      next[stageIndex] = Math.max(MIN_STAGE_GREEN_SECONDS, Math.min(val, cap));
+      return clampStageTimingsToLoopCap(next, sc);
+    });
   };
 
   const getPercentage = () => {
-      let currentMax = 0;
-      if (currentStage === 0) currentMax = Math.max(timings[1], timings[5]);
-      if (currentStage === 1) currentMax = Math.max(timings[2], timings[6]);
-      if (currentStage === 2) currentMax = Math.max(timings[3], timings[7]);
-      if (currentStage === 3) currentMax = Math.max(timings[4], timings[8]);
-      
-      if (lightState === 'GREEN') return (timer / currentMax) * 100;
+      const sc = compiledStages.length > 0 ? compiledStages.length : 4;
+      const idx = currentStage % sc;
+      const currentMax = stageTimings[idx] ?? DEFAULT_STAGE_GREEN_SECONDS;
+
+      if (lightState === 'GREEN') return (timer / Math.max(currentMax, 1)) * 100;
       if (lightState === 'YELLOW') return (timer / DEFAULT_TIMINGS.yellow) * 100;
       return (timer / DEFAULT_TIMINGS.allRed) * 100;
   };
@@ -782,8 +1054,11 @@ export default function App() {
     setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
+  const stageTimingRowCount = compiledStages.length > 0 ? compiledStages.length : 4;
+  const stageTimingLoopTotal = Array.from({ length: stageTimingRowCount }, (_, i) => stageTimings[i] ?? DEFAULT_STAGE_GREEN_SECONDS).reduce((a, b) => a + b, 0);
+
   return (
-    <div className="h-screen w-full grid grid-cols-[280px_1fr_280px] grid-rows-[48px_1fr_200px] overflow-hidden bg-[#0D0F12]">
+    <div className="h-screen w-full grid grid-cols-[280px_minmax(0,1fr)_280px] grid-rows-[48px_minmax(0,1fr)_200px] overflow-hidden bg-[#0D0F12]">
       {/* Header Area */}
       <header className="col-span-full bg-[#1A1D23] border-b border-[#2D333B] flex items-center justify-between px-4 z-10">
         <div className="flex items-center gap-3 font-mono font-bold tracking-wider text-[11px]">
@@ -797,18 +1072,69 @@ export default function App() {
             <span>UTC-08:00</span>
           </div>
           <div className="hidden sm:block">LOC: 34.0522° N, 118.2437° W</div>
-          <div>CYCLE: {Object.values(timings).reduce((a: number, b: number) => a + b, 0)}s</div>
+          <div>CYCLE: {stageTimingLoopTotal}s / {MAX_TOTAL_LOOP_SECONDS}s</div>
         </div>
       </header>
 
       {/* Left Sidebar: Timing Controls */}
-      <aside className="row-start-2 row-span-2 bg-[#1A1D23] border-r border-[#2D333B] p-4 flex flex-col gap-6 overflow-y-auto scrollbar-hide">
+      <aside className="col-start-1 row-start-2 row-span-2 bg-[#1A1D23] border-r border-[#2D333B] p-4 flex flex-col gap-6 overflow-y-auto scrollbar-hide min-h-0">
+        <CollapsibleSection id="editor" title="Logic Programmer" isCollapsed={collapsed.editor} onToggle={toggleCollapsed}>
+          <div className="flex flex-col gap-2">
+            <div className="text-[9px] text-gray-500 font-mono mb-1 leading-tight">
+              # Syntax: phase(N): then KEYWORD.GO lines. Green seconds per stage are set below.
+            </div>
+            <div className="relative w-full h-64 bg-black/40 border border-[#2D333B] rounded focus-within:border-[#3FB950] transition-colors overflow-hidden">
+              <div 
+                  ref={highlightRef}
+                  className="absolute inset-0 p-2 font-mono text-[10px] pointer-events-none whitespace-pre overflow-hidden" 
+                  aria-hidden="true"
+              >
+                  {programCode.split('\n').map((line, i) => {
+                      const activeStage = compiledStages.length > 0 ? compiledStages[currentStage] : null;
+                      const isHighlighted = activeStage && i >= activeStage.lineStart && i <= activeStage.lineEnd;
+                      return (
+                          <div key={i} className={isHighlighted ? "bg-[#3FB950]/20 rounded-sm -mx-1 px-1" : "text-transparent"}>
+                              {line || ' '}
+                          </div>
+                      );
+                  })}
+              </div>
+              <textarea
+                value={programCode}
+                onChange={(e) => setProgramCode(e.target.value)}
+                onScroll={(e) => {
+                    if (highlightRef.current) {
+                        highlightRef.current.scrollTop = e.currentTarget.scrollTop;
+                        highlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
+                    }
+                }}
+                spellCheck={false}
+                className="absolute inset-0 w-full h-full p-2 font-mono text-[10px] text-[#3FB950] bg-transparent resize-none focus:outline-none"
+              />
+            </div>
+            {programError && (
+              <div className="text-[9px] text-[#F85149] font-mono whitespace-pre-wrap leading-tight bg-[#F85149]/10 p-1 border border-[#F85149]/30 rounded">
+                {programError}
+              </div>
+            )}
+            <button 
+              onClick={() => {
+                  compile();
+                  addLog("PROGRAM UPDATED", "var(--green)");
+              }}
+              className="text-[9px] bg-[#3FB950]/20 text-[#3FB950] py-1 border border-[#3FB950]/40 rounded hover:bg-[#3FB950]/30"
+            >
+              RE-COMPILE SEQUENCE
+            </button>
+          </div>
+        </CollapsibleSection>
+
         <CollapsibleSection id="flow" title="Real-time Flow Rates" isCollapsed={collapsed.flow} onToggle={toggleCollapsed}>
             <TrafficFlowRates rates={trafficRates} />
         </CollapsibleSection>
 
-        <CollapsibleSection id="ring1" title="Ring 1 Logic (Mainst)" isCollapsed={collapsed.ring1} onToggle={toggleCollapsed} showBadge>
-          <div className="flex flex-col gap-4">
+        <CollapsibleSection id="phaseTimings" title="Stage timings" isCollapsed={collapsed.phaseTimings} onToggle={toggleCollapsed} showBadge>
+          <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between text-[10px] text-gray-500 mb-1">
               <span>SYSTEM_MODE</span>
               <button 
@@ -818,96 +1144,41 @@ export default function App() {
                 {isAdaptive ? 'ADAPTIVE_ON' : 'MANUAL_OVERRIDE'}
               </button>
             </div>
-            
-            <div className="pb-4 border-b border-[#2D333B]/50">
-              <div className="flex justify-between items-center mb-2 px-1">
-                <span className="text-[10px] font-mono text-gray-400 uppercase">P1: Major Left</span>
-                <span className="text-[10px] text-[#3FB950] font-mono">{timings[1]}s</span>
-              </div>
-              <input 
-                type="range" min="5" max="30" 
-                value={timings[1]} 
-                disabled={isAdaptive}
-                onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    handleTimingChange(1, val);
-                    handleTimingChange(5, val);
-                }}
-                className="w-full accent-[#3FB950] h-1" 
-              />
-            </div>
-            
-            <div className="pb-4 border-b border-[#2D333B]/50">
-              <div className="flex justify-between items-center mb-2 px-1">
-                <span className="text-[10px] font-mono text-gray-400 uppercase">P2: Major Thru</span>
-                <span className="text-[10px] text-[#3FB950] font-mono">{timings[2]}s</span>
-              </div>
-              <input 
-                type="range" min="5" max="30" 
-                value={timings[2]} 
-                disabled={isAdaptive}
-                onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    handleTimingChange(2, val);
-                    handleTimingChange(6, val);
-                }}
-                className="w-full accent-[#3FB950] h-1" 
-              />
-            </div>
-          </div>
-        </CollapsibleSection>
-
-        <CollapsibleSection id="ring2" title="Ring 2 Logic (Sidest)" isCollapsed={collapsed.ring2} onToggle={toggleCollapsed}>
-          <div className="flex flex-col gap-4">
-            <div className="pb-4 border-b border-[#2D333B]/50">
-              <div className="flex justify-between items-center mb-2 px-1">
-                <span className="text-[10px] font-mono text-gray-400 uppercase">P3: Minor Left</span>
-                <span className="text-[10px] text-[#3FB950] font-mono">{timings[3]}s</span>
-              </div>
-              <input 
-                type="range" min="5" max="30" 
-                value={timings[3]} 
-                disabled={isAdaptive}
-                onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    handleTimingChange(3, val);
-                    handleTimingChange(7, val);
-                }}
-                className="w-full accent-[#3FB950] h-1" 
-              />
-            </div>
-            
-            <div className="pb-4 border-b border-[#2D333B]/50">
-              <div className="flex justify-between items-center mb-2 px-1">
-                <span className="text-[10px] font-mono text-gray-400 uppercase">P4: Minor Thru</span>
-                <span className="text-[10px] text-[#3FB950] font-mono">{timings[4]}s</span>
-              </div>
-              <input 
-                type="range" min="5" max="30" 
-                value={timings[4]} 
-                disabled={isAdaptive}
-                onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    handleTimingChange(4, val);
-                    handleTimingChange(8, val);
-                }}
-                className="w-full accent-[#3FB950] h-1" 
-              />
+            <div className="flex flex-col gap-2 max-h-[min(52vh,28rem)] overflow-y-auto pr-1 scrollbar-hide">
+              {Array.from({ length: stageTimingRowCount }, (_, i) => {
+                const label =
+                  compiledStages.length > 0 ? compiledStages[i].label : `STAGE_${i + 1}`;
+                const sec = stageTimings[i] ?? DEFAULT_STAGE_GREEN_SECONDS;
+                const sliderMax = Math.max(
+                  MIN_STAGE_GREEN_SECONDS,
+                  MAX_TOTAL_LOOP_SECONDS - (stageTimingLoopTotal - sec),
+                );
+                return (
+                  <div key={`${label}-${i}`} className="pb-2 border-b border-[#2D333B]/40 last:border-0">
+                    <div className="flex justify-between items-center mb-1 px-0.5 gap-2">
+                      <span className="text-[9px] font-mono text-gray-400 uppercase truncate" title={label}>
+                        {label}
+                      </span>
+                      <span className="text-[9px] text-[#3FB950] font-mono shrink-0">{sec}s</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={MIN_STAGE_GREEN_SECONDS}
+                      max={sliderMax}
+                      value={sec}
+                      disabled={isAdaptive}
+                      onChange={(e) => handleStageTimingChange(i, parseInt(e.target.value, 10))}
+                      className="w-full accent-[#3FB950] h-1"
+                    />
+                  </div>
+                );
+              })}
             </div>
           </div>
         </CollapsibleSection>
 
         <CollapsibleSection id="queue" title="Queue Metrics (Offrd)" isCollapsed={collapsed.queue} onToggle={toggleCollapsed}>
-            <div className="flex flex-wrap gap-1 mt-1">
-                {Object.entries(offScreenQueues).map(([id, count]: [string, number]) => count > 0 && (
-                    <div key={id} className="bg-[#F85149]/10 text-[#F85149] px-2 py-0.5 border border-[#F85149]/30 rounded text-[9px] font-mono">
-                        {id.replace(/-/g, '_').toUpperCase()}: {count}
-                    </div>
-                ))}
-                {Object.values(offScreenQueues).every((v: number) => v === 0) && (
-                    <div className="text-[9px] text-gray-600 font-mono italic">NO_CONGESTION</div>
-                )}
-            </div>
+            <QueueChart history={queueHistory} />
         </CollapsibleSection>
 
         <div className="mt-auto space-y-4 pt-4 border-t border-[#2D333B]">
@@ -933,23 +1204,22 @@ export default function App() {
       </aside>
 
       {/* Center Area: Simulator Visual */}
-      <main className="relative flex items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]">
+      <main className="col-start-2 row-start-2 relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]">
         <canvas 
           ref={canvasRef} 
           width={CANVAS_SIZE} 
           height={CANVAS_SIZE}
-          className="rounded shadow-2xl border border-[#2D333B]"
-          style={{ width: 'min(70vh, 70vw)', height: 'min(70vh, 70vw)' }}
+          className="box-border max-h-[min(70vh,100%)] max-w-[min(70vh,100%)] aspect-square w-full rounded border border-[#2D333B] shadow-2xl"
         />
         
         <div className="absolute top-4 left-4 font-mono text-[10px] text-[#8B949E] pointer-events-none">
             01-02-B-03-04 SEQUENCE ACTIVE<br/>
-            STAGE_{currentStage + 1} // ADDR: 0x76A2
+            {compiledStages.length > 0 ? (compiledStages[currentStage]?.label || `STAGE_${currentStage + 1}`) : `STAGE_${currentStage + 1}`} // ADDR: 0x76A2
         </div>
       </main>
 
       {/* Right Sidebar: Cycle Log */}
-      <aside className="bg-[#1A1D23] border-l border-[#2D333B] p-4 flex flex-col gap-4 overflow-hidden scrollbar-hide">
+      <aside className="col-start-3 row-start-2 flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden border-l border-[#2D333B] bg-[#1A1D23] p-4 scrollbar-hide">
         <CollapsibleSection id="analytics" title="Timing Analytics" isCollapsed={collapsed.analytics} onToggle={toggleCollapsed}>
             <AnalyticalChart history={timingHistory} />
         </CollapsibleSection>
@@ -974,7 +1244,7 @@ export default function App() {
       </aside>
 
       {/* Bottom Panel: Real-time Monitor */}
-      <footer className="col-start-2 col-span-2 bg-[#1A1D23] border-t border-[#2D333B] p-4 grid grid-cols-4 gap-4">
+      <footer className="col-span-2 col-start-2 row-start-3 grid grid-cols-4 gap-4 border-t border-[#2D333B] bg-[#1A1D23] p-4">
         <div className="border border-[#2D333B] p-3 rounded flex flex-col justify-between">
            <div className="text-[9px] uppercase text-[#8B949E] mb-1 tracking-wider">Interval Timer</div>
            <div className="text-2xl font-mono text-[#3FB950]">{timer.toFixed(1)}s</div>
@@ -998,8 +1268,17 @@ export default function App() {
         <div className="border border-[#2D333B] p-3 rounded flex flex-col justify-between">
            <div className="text-[9px] uppercase text-[#8B949E] mb-1 tracking-wider">Barrier Logic</div>
            <div className="text-sm font-mono text-[#C9D1D9] mt-2 leading-tight">
-             RING_1: {currentStage < 2 ? 'GO' : 'WAIT'}<br/>
-             RING_2: {currentStage >= 2 ? 'GO' : 'WAIT'}
+             {compiledStages.length > 0 ? (
+                 <>
+                 STAGE: {compiledStages[currentStage]?.label || `STAGE_${currentStage + 1}`}<br/>
+                 PROGRAM: ACTIVE
+                 </>
+             ) : (
+                 <>
+                 RING_1: {currentStage < 2 ? 'GO' : 'WAIT'}<br/>
+                 RING_2: {currentStage >= 2 ? 'GO' : 'WAIT'}
+                 </>
+             )}
            </div>
            <div className="text-[9px] text-[#F85149] uppercase mt-2">Safety Lock: OK</div>
         </div>

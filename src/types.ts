@@ -1,13 +1,17 @@
 
 export enum Phase {
-  P1 = 1, // Major Left
-  P2 = 2, // Major Thru
-  P3 = 3, // Minor Left
-  P4 = 4, // Minor Thru
-  P5 = 5, // Major Left (Opposite)
-  P6 = 6, // Major Thru (Opposite)
-  P7 = 7, // Minor Left (Opposite)
-  P8 = 8, // Minor Thru (Opposite)
+  NORTHBOUND_LEFT = 1,
+  NORTHBOUND_STRAIGHT = 2,
+  NORTHBOUND_RIGHT = 3,
+  WESTBOUND_LEFT = 4,
+  WESTBOUND_STRAIGHT = 5,
+  WESTBOUND_RIGHT = 6,
+  SOUTHBOUND_LEFT = 7,
+  SOUTHBOUND_STRAIGHT = 8,
+  SOUTHBOUND_RIGHT = 9,
+  EASTBOUND_LEFT = 10,
+  EASTBOUND_STRAIGHT = 11,
+  EASTBOUND_RIGHT = 12,
 }
 
 export type LightState = 'GREEN' | 'YELLOW' | 'RED';
@@ -31,13 +35,16 @@ export interface Vehicle {
   width: number;
   length: number;
   isTurning?: boolean;
-  turnProgress?: number; // 0 to 1
+  turnProgress?: number;
   turnAngleStart?: number;
   turnAngleEnd?: number;
   turnCenterX?: number;
   turnCenterY?: number;
   turnRadius?: number;
-  speedType?: 'NORMAL' | 'FAST' | 'SLOW';
+  cruiseSpeed: number;
+  startDelay: number;
+  spawnAtMs: number;
+  brakeIntensity?: number;
 }
 
 export interface Lane {
