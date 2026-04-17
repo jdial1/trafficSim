@@ -1,5 +1,5 @@
 
-export enum Phase {
+export enum Movement {
   NORTHBOUND_LEFT = 1,
   NORTHBOUND_STRAIGHT = 2,
   NORTHBOUND_RIGHT = 3,
@@ -16,14 +16,19 @@ export enum Phase {
 
 export type LightState = 'GREEN' | 'YELLOW' | 'RED';
 
-export interface PhaseTiming {
+export interface MovementTiming {
   green: number;
   yellow: number;
   allRed: number;
 }
 
+export type VehicleType = 'CAR' | 'MOTORCYCLE' | 'BUS' | 'TRUCK';
+
 export interface Vehicle {
   id: string;
+  vType: VehicleType;
+  accel: number;
+  decel: number;
   x: number;
   y: number;
   vx: number;
@@ -55,5 +60,5 @@ export interface Lane {
   endY: number;
   direction: 'N' | 'S' | 'E' | 'W';
   type: 'LEFT' | 'THRU' | 'RIGHT';
-  phase: Phase;
+  movement: Movement;
 }

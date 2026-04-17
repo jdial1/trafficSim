@@ -1,20 +1,62 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Traffic Simulator
 
-# Run and deploy your AI Studio app
+A high-performance traffic intersection simulator built with React and HTML5 Canvas.
 
-This contains everything you need to run your app locally.
+## Features
 
-View your app in AI Studio: https://ai.studio/apps/50c4b134-2e22-4dac-85f0-749b9d640184
+- **Real-time Simulation**: Smooth 60fps canvas-based rendering of vehicles and intersections.
+- **Custom Traffic Program**: Use a specialized DSL to define traffic phases and movements.
+- **Adaptive Control**: System can automatically adjust phase timings based on real-time traffic density.
+- **Interactive Monitoring**: Real-time analytics, congestion charts, and phase logs.
+- **Responsive Design**: Modern, dark-themed UI built with Tailwind CSS.
 
-## Run Locally
+## Getting Started
 
-**Prerequisites:**  Node.js
+### Prerequisites
 
+- [Node.js](https://nodejs.org/) (v18 or higher recommended)
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+### Installation
+
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd trafficSim
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Start the development server:
+   ```bash
+   npm run dev
+   ```
+
+## Usage
+
+### Defining Traffic Phases
+
+You can program the traffic lights using the built-in editor. Each phase defines which movements are allowed to go.
+
+Example:
+```
+phase(1):
+    NORTH_STRAIGHT.GO
+    NORTH_LEFT.GO
+    SOUTH_STRAIGHT.GO
+```
+
+### Control Modes
+
+- **Manual**: Manually adjust the duration of each green light phase.
+- **Adaptive**: The system analyzes queue lengths and adjusts timings to minimize congestion.
+
+## Built With
+
+- [React](https://reactjs.org/) - UI Framework
+- [Tailwind CSS](https://tailwindcss.com/) - Styling
+- [Lucide React](https://lucide.dev/) - Icons
+- [Recharts](https://recharts.org/) - Analytics Charts
+- [Framer Motion](https://www.framer.com/motion/) - UI Animations

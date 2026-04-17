@@ -1,49 +1,49 @@
-import { Phase } from './types';
+import { Movement } from './types';
 
-export const KEYWORD_MAP: Record<string, Phase> = {
-  NORTHBOUND_LEFT: Phase.NORTHBOUND_LEFT,
-  NORTHBOUND_STRAIGHT: Phase.NORTHBOUND_STRAIGHT,
-  NORTHBOUND_RIGHT: Phase.NORTHBOUND_RIGHT,
-  WESTBOUND_LEFT: Phase.WESTBOUND_LEFT,
-  WESTBOUND_STRAIGHT: Phase.WESTBOUND_STRAIGHT,
-  WESTBOUND_RIGHT: Phase.WESTBOUND_RIGHT,
-  SOUTHBOUND_LEFT: Phase.SOUTHBOUND_LEFT,
-  SOUTHBOUND_STRAIGHT: Phase.SOUTHBOUND_STRAIGHT,
-  SOUTHBOUND_RIGHT: Phase.SOUTHBOUND_RIGHT,
-  EASTBOUND_LEFT: Phase.EASTBOUND_LEFT,
-  EASTBOUND_STRAIGHT: Phase.EASTBOUND_STRAIGHT,
-  EASTBOUND_RIGHT: Phase.EASTBOUND_RIGHT,
+export const KEYWORD_MAP: Record<string, Movement> = {
+  NORTH_LEFT: Movement.NORTHBOUND_LEFT,
+  NORTH_STRAIGHT: Movement.NORTHBOUND_STRAIGHT,
+  NORTH_RIGHT: Movement.NORTHBOUND_RIGHT,
+  WEST_LEFT: Movement.WESTBOUND_LEFT,
+  WEST_STRAIGHT: Movement.WESTBOUND_STRAIGHT,
+  WEST_RIGHT: Movement.WESTBOUND_RIGHT,
+  SOUTH_LEFT: Movement.SOUTHBOUND_LEFT,
+  SOUTH_STRAIGHT: Movement.SOUTHBOUND_STRAIGHT,
+  SOUTH_RIGHT: Movement.SOUTHBOUND_RIGHT,
+  EAST_LEFT: Movement.EASTBOUND_LEFT,
+  EAST_STRAIGHT: Movement.EASTBOUND_STRAIGHT,
+  EAST_RIGHT: Movement.EASTBOUND_RIGHT,
 };
 
-export interface ProgrammedStage {
-  phases: Phase[];
+export interface Phase {
+  movements: Movement[];
   label: string;
   lineStart: number;
   lineEnd: number;
 }
 
 export interface ParseResult {
-  stages: ProgrammedStage[];
+  phases: Phase[];
   error?: string;
 }
 
 export function parseTrafficProgram(code: string): ParseResult {
-  const stages: ProgrammedStage[] = [];
+  const phases: Phase[] = [];
   const lines = code.split('\n');
 
-  let currentPhases: Set<Phase> = new Set();
+  let currentMovements: Set<Movement> = new Set();
   let currentLabel = '';
   let currentLineStart = 0;
 
   const flushBlock = (endLineIndex: number) => {
-    if (currentPhases.size > 0 || currentLabel) {
-      stages.push({
-        phases: Array.from(currentPhases),
-        label: currentLabel || `STAGE_${stages.length + 1}`,
+    if (currentMovements.size > 0 || currentLabel) {
+      phases.push({
+        movements: Array.from(currentMovements),
+        label: currentLabel || `PHASE_${phases.length + 1}`,
         lineStart: currentLineStart,
         lineEnd: endLineIndex
       });
-      currentPhases = new Set();
+      currentMovements = new Set();
       currentLabel = '';
     }
   };
@@ -55,37 +55,37 @@ export function parseTrafficProgram(code: string): ParseResult {
     const phaseMatch = line.match(/^phase\s*\(\s*(\d+)\s*\)\s*:/);
     if (phaseMatch) {
       flushBlock(i - 1);
-      currentLabel = `STAGE_${phaseMatch[1]}`;
+      currentLabel = `PHASE_${phaseMatch[1]}`;
       currentLineStart = i;
       continue;
     }
 
     if (/^duration\s*=/i.test(line)) {
       return {
-        stages: [],
-        error: `Line ${i + 1}: duration is set in the stage timings panel, not in the program.`,
+        phases: [],
+        error: `Line ${i + 1}: duration is set in the phase timings panel, not in the program.`,
       };
     }
 
     let foundKeyword = false;
-    for (const [keyword, phase] of Object.entries(KEYWORD_MAP)) {
+    for (const [keyword, movement] of Object.entries(KEYWORD_MAP)) {
       if (line === `${keyword}.GO`) {
-        currentPhases.add(phase);
+        currentMovements.add(movement);
         foundKeyword = true;
         break;
       }
     }
 
     if (!foundKeyword && !phaseMatch) {
-      return { stages: [], error: `Syntax error on line ${i + 1}: ${lines[i].trim()}` };
+      return { phases: [], error: `Syntax error on line ${i + 1}: ${lines[i].trim()}` };
     }
   }
 
   flushBlock(lines.length - 1);
 
-  if (stages.length === 0) {
-    return { stages: [], error: 'No valid phases found.' };
+  if (phases.length === 0) {
+    return { phases: [], error: 'No valid phases found.' };
   }
 
-  return { stages };
+  return { phases };
 }
