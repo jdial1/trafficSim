@@ -449,6 +449,19 @@ phase(4):
   const requestRef = useRef<number>(null);
   const lastTimeRef = useRef<number>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
+  const [bgFontsReady, setBgFontsReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      await document.fonts.ready;
+      await document.fonts.load('700 24px "Material Symbols Outlined"');
+      if (!cancelled) setBgFontsReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     LANES.forEach(l => laneCarsCacheRef.current[l.id] = []);
@@ -981,7 +994,7 @@ phase(4):
     const centerX = CANVAS_SIZE / 2;
     const centerY = CANVAS_SIZE / 2;
 
-    if (!bgCanvasRef.current) {
+    if (bgFontsReady && !bgCanvasRef.current) {
       const bg = document.createElement('canvas');
       bg.width = CANVAS_SIZE; bg.height = CANVAS_SIZE;
       const bCtx = bg.getContext('2d');
@@ -1083,7 +1096,9 @@ phase(4):
       bgCanvasRef.current = bg;
     }
 
-    ctx.drawImage(bgCanvasRef.current, 0, 0);
+    if (bgCanvasRef.current) {
+      ctx.drawImage(bgCanvasRef.current, 0, 0);
+    }
 
     const drawIntersectionPaths = () => {
       ctx.save();
@@ -1229,7 +1244,7 @@ phase(4):
     drawSignal(centerX + 130, centerY - 60, Math.PI/2, [Movement.WESTBOUND_STRAIGHT]);
     drawSignal(centerX + 130, centerY - 20, Math.PI/2, [Movement.WESTBOUND_LEFT], true);
 
-  }, [activeMovements, lightState, offScreenQueues]);
+  }, [activeMovements, lightState, offScreenQueues, bgFontsReady]);
 
   const loop = useCallback((time: number) => {
     if (lastTimeRef.current !== null && isPlaying) {
