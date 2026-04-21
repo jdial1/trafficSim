@@ -15,7 +15,10 @@ export const DEFAULT_PHASE_GREEN_SECONDS = 10;
 
 export const PHASE_TEMPLATES = [
   {
+    shortLabel: 'STD',
     name: 'Standard',
+    detail:
+      '4-phase barrier sequence. N/S protected lefts, N/S through and rights with crosswalks, E/W protected lefts, E/W through and rights with crosswalks. Symmetric four-leg timing.',
     code: `phase(1): # N/S Protected Lefts
 NORTH_LEFT.GO
 SOUTH_LEFT.GO
@@ -49,7 +52,10 @@ CROSSWALK_NORTH.GO
 CROSSWALK_SOUTH.GO`
   },
   {
+    shortLabel: 'ART',
     name: 'Arterial',
+    detail:
+      '5-phase arterial priority. Long N/S mainline straight, protected N/S lefts, then full eastbound and westbound minor-street phases, finishing with N/S crosswalk service.',
     code: `phase(1): # Arterial Straight (Main Flow)
 NORTH_STRAIGHT.GO
 SOUTH_STRAIGHT.GO
@@ -85,7 +91,10 @@ CROSSWALK_NORTH.GO
 CROSSWALK_SOUTH.GO`
   },
   {
+    shortLabel: 'SWP',
     name: 'Sweep',
+    detail:
+      '5-phase directional sweep. Full northbound and southbound stacks, overlapping straights, E/W crossing with yield lefts, exclusive pedestrian Barnes dance.',
     code: `phase(1): # Northbound gets everything
 NORTH_STRAIGHT.GO
 NORTH_LEFT.GO
@@ -120,7 +129,10 @@ phase(5): # Barnes Dance
 EXCLUSIVE_PEDESTRIAN_PHASE.GO`
   },
   {
+    shortLabel: 'ADV',
     name: 'Advanced',
+    detail:
+      'Conditional phase_insert when NORTH_LEFT queue exceeds threshold; phases use min/max green; mix of yield and protected lefts; timed exclusive pedestrian phase.',
     code: `if (QUEUE.NORTH_LEFT > 5):
     phase_insert(NORTH_LEFT.GO, SOUTH_LEFT.GO)
 

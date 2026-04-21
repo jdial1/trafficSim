@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Save, Plus, Minus, Trash2, Download } from 'lucide-react';
+import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Save, Plus, Minus, Trash2, Download, Mail, Terminal, Map as MapIcon } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 import { Movement, Vehicle, Lane, LightState, MovementTiming, VehicleType } from './types';
 import { parseTrafficProgram, Phase, ConditionalRule, PhaseCommand, KEYWORD_MAP } from './interpreter';
@@ -14,6 +14,8 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import vehicleCatalog from './vehicles.json';
 import { renderVehicleSprite } from './renderVehicleDesign';
 import { FirmwareUpdatePrompt } from './components/FirmwareUpdatePrompt';
+import { GameIntro } from './components/GameIntro';
+import { level1Briefing } from './briefing/level1';
 
 type BeforeInstallPromptEventExtended = Event & {
   prompt: () => Promise<void>;
@@ -473,13 +475,39 @@ const CollapsibleSection = React.memo(({
     </div>
 ));
 
+const BriefingTab = () => (
+  <div className="flex flex-col h-full bg-[#1A1D23] p-4 text-[#C9D1D9] font-mono overflow-y-auto scrollbar-hide">
+    <div className="border-2 border-[#2D333B] bg-black/40 rounded-none p-4 mb-4 shadow-xl relative">
+      <div className="absolute top-0 right-0 px-2 py-0.5 bg-[#F85149] text-black text-[9px] font-bold tracking-widest">CONFIDENTIAL</div>
+      <div className="text-xs text-[#8B949E] mb-1 mt-2">FROM: <span className="text-[#58A6FF]">{level1Briefing.from}</span></div>
+      <div className="text-xs text-[#8B949E] mb-3 border-b border-[#2D333B] pb-3">SUBJECT: <span className="text-[#C9D1D9]">{level1Briefing.subject}</span></div>
+      <div className="text-[13px] leading-relaxed whitespace-pre-wrap">{level1Briefing.body}</div>
+      <ul className="mt-4 space-y-2 list-disc pl-5 text-[12px] text-[#3FB950]">
+        {level1Briefing.bullets.map((b, i) => (
+          <li key={i}><span className="text-[#C9D1D9]">{b}</span></li>
+        ))}
+      </ul>
+    </div>
+    <div className="mt-auto border-t-2 border-[#2D333B] pt-4">
+      <div className="text-[10px] uppercase text-[#8B949E] tracking-wider mb-2">AUTHORIZED HARDWARE</div>
+      <div className="flex flex-wrap gap-2">
+        {level1Briefing.hardware.map((h, i) => (
+          <span key={i} className="text-[10px] px-2 py-1 bg-[#D29922]/10 text-[#D29922] border border-[#D29922]/40 rounded-none uppercase">
+            {h}
+          </span>
+        ))}
+      </div>
+    </div>
+  </div>
+);
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const simMainRef = useRef<HTMLElement | null>(null);
   const inspectPaintRef = useRef<Vehicle | null>(null);
   const [inspectPanel, setInspectPanel] = useState<{ vehicle: Vehicle; left: number; top: number } | null>(null);
-  const [isPlaying, setIsPlaying] = useState(true);
-  const isPlayingRef = useRef(true);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const isPlayingRef = useRef(false);
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
@@ -498,6 +526,53 @@ export default function App() {
   const [isAdaptive, setIsAdaptive] = useState(true);
   
   // UI State
+  const [introPhase, setIntroPhase] = useState<'splash' | 'home' | null>('splash');
+  const [mobileScreen, setMobileScreen] = useState<'briefing' | 'engineering' | 'execution'>('briefing');
+  const [isMobilePortrait, setIsMobilePortrait] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return narrowViewport() && window.matchMedia('(orientation: portrait)').matches;
+  });
+  const [executionSplitActive, setExecutionSplitActive] = useState(false);
+  const [sessionCarsCleared, setSessionCarsCleared] = useState(0);
+  const [sessionCrashes, setSessionCrashes] = useState(0);
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+  const [sessionTime, setSessionTime] = useState(0);
+
+  const editorRef = useRef<any>(null);
+  const decorationsRef = useRef<any[]>([]);
+
+  const handleEditorDidMount = (editor: any, monaco: any) => {
+    editorRef.current = editor;
+  };
+
+  useEffect(() => {
+    let interval: number;
+    if (executionSplitActive && isPlaying) {
+      interval = window.setInterval(() => {
+        setSessionTime(prev => prev + 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [executionSplitActive, isPlaying]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobilePortrait(narrowViewport() && window.matchMedia('(orientation: portrait)').matches);
+    };
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (introPhase !== 'splash') return;
+    const t = window.setTimeout(() => setIntroPhase('home'), 2600);
+    return () => clearTimeout(t);
+  }, [introPhase]);
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => narrowViewport());
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
@@ -522,6 +597,11 @@ export default function App() {
   const [timer, setTimer] = useState(0);
   const [logs, setLogs] = useState<{ id: string, time: string, event: string, color?: string }[]>([]);
   const [zoom, setZoom] = useState(() => defaultZoom());
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const isDraggingCanvasRef = useRef(false);
+  const dragStartCanvasRef = useRef({ x: 0, y: 0 });
+  const panStartRef = useRef({ x: 0, y: 0 });
+  const hasDraggedRef = useRef(false);
   const [timeScale, setTimeScale] = useState<TimeScale>(1);
   const timeScaleRef = useRef<TimeScale>(1);
   const [showHeatmap, setShowHeatmap] = useState(false);
@@ -597,6 +677,25 @@ phase(4):
   const [cmdDir, setCmdDir] = useState<string>('');
   const [cmdTurn, setCmdTurn] = useState<string>('');
 
+  const monaco = useMonaco();
+  useEffect(() => {
+    if (!editorRef.current || !monaco) return;
+    const phase = compiledPhases[currentPhase];
+    if (phase && phase.lineStart !== undefined && phase.lineEnd !== undefined) {
+      decorationsRef.current = editorRef.current.deltaDecorations(decorationsRef.current, [
+        {
+          range: new monaco.Range(phase.lineStart + 1, 1, phase.lineEnd + 1, 1),
+          options: {
+            isWholeLine: true,
+            className: 'bg-[#3FB950]/20 border-l-2 border-[#3FB950]',
+          }
+        }
+      ]);
+    } else {
+      decorationsRef.current = editorRef.current.deltaDecorations(decorationsRef.current, []);
+    }
+  }, [currentPhase, compiledPhases, executionSplitActive, monaco]);
+
   const appendCommand = useCallback((action: string) => {
     let cmd = '';
     if (cmdDir === 'CROSSWALK') {
@@ -634,7 +733,6 @@ phase(4):
     });
   }, []);
 
-  const monaco = useMonaco();
   useEffect(() => {
     if (monaco) {
        const provider = monaco.languages.registerCompletionItemProvider('python', {
@@ -669,16 +767,6 @@ phase(4):
        return () => provider.dispose();
     }
   }, [monaco]);
-
-  const applyTemplate = (code: string) => {
-    if (!code) return;
-    setProgramCode(code);
-    // Don't switch to edit mode, stay in view mode as requested
-    // Trigger compilation immediately for better UX in view mode
-    compile(code);
-    // Reset scroll positions to ensure text appears "cleared" and fresh
-    addLog("TEMPLATE_APPLIED", "var(--major)");
-  };
 
   const saveUserTemplate = () => {
     localStorage.setItem('traffic_user_template', programCode);
@@ -722,7 +810,6 @@ phase(4):
   const laneCarsCacheRef = useRef<Record<string, Vehicle[]>>({});
   const skidMarksRef = useRef<SkidMarkSegment[]>([]);
   const previousRearTiresRef = useRef<Record<string, RearTires>>({});
-  const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const requestRef = useRef<number>(null);
   const lastTimeRef = useRef<number>(null);
   const crashDetectedRef = useRef(false);
@@ -777,6 +864,21 @@ phase(4):
     setIsPlaying(true);
     addLog(reason === 'CRASH' ? 'CRASH RESET' : 'MANUAL RESET', reason === 'CRASH' ? 'var(--red)' : 'var(--minor)');
   }, [addLog]);
+
+  const applyTemplate = (code: string) => {
+    if (!code) return;
+    vehiclesRef.current = [];
+    previousRearTiresRef.current = {};
+    crashDetectedRef.current = false;
+    setCrashInfo(null);
+    setIsCrashModalMinimized(false);
+    setOffScreenQueues({});
+    inspectPaintRef.current = null;
+    setInspectPanel(null);
+    setProgramCode(code);
+    compile(code);
+    addLog("TEMPLATE_APPLIED", "var(--major)");
+  };
 
   const detectCrash = useCallback((vehicles: Vehicle[]): CrashInfo | null => {
     const center = CANVAS_SIZE / 2;
@@ -1488,13 +1590,19 @@ phase(4):
     m = performance.now();
 
     let validCount = 0;
+    let newlyCleared = 0;
     for (let i = 0; i < vehicles.length; i++) {
       const v = vehicles[i];
       if (v.x >= -50 && v.x <= CANVAS_SIZE + 50 && v.y >= -50 && v.y <= CANVAS_SIZE + 50) {
         vehicles[validCount++] = v;
+      } else {
+        newlyCleared++;
       }
     }
     vehicles.length = validCount;
+    if (newlyCleared > 0) {
+      setSessionCarsCleared(prev => prev + newlyCleared);
+    }
     const filteredRearTires: Record<string, RearTires> = {};
     for (let i = 0; i < vehicles.length; i++) {
       const vehicleId = vehicles[i].id;
@@ -1513,6 +1621,7 @@ phase(4):
       if (collision) {
         crashDetectedRef.current = true;
         setCrashInfo(collision);
+        setSessionCrashes(prev => prev + 1);
         setIsCrashModalMinimized(false);
         isPlayingRef.current = false;
         setIsPlaying(false);
@@ -1534,114 +1643,106 @@ phase(4):
     const centerX = CANVAS_SIZE / 2;
     const centerY = CANVAS_SIZE / 2;
 
-    if (bgFontsReady && !bgCanvasRef.current) {
-      const bg = document.createElement('canvas');
-      bg.width = CANVAS_SIZE; bg.height = CANVAS_SIZE;
-      const bCtx = bg.getContext('2d');
-      if (bCtx) {
-        bCtx.fillStyle = '#1A1D23';
-        bCtx.fillRect(centerX - INTERSECTION_SIZE / 2, 0, INTERSECTION_SIZE, CANVAS_SIZE);
-        bCtx.fillRect(0, centerY - INTERSECTION_SIZE / 2, CANVAS_SIZE, INTERSECTION_SIZE);
-        bCtx.fillStyle = '#0D0F12';
-        bCtx.fillRect(centerX - INTERSECTION_SIZE / 2, centerY - INTERSECTION_SIZE / 2, INTERSECTION_SIZE, INTERSECTION_SIZE);
-        bCtx.strokeStyle = '#2D333B';
-        bCtx.lineWidth = 1;
+    const drawBgGlyphLayer = (c: CanvasRenderingContext2D) => {
+      const drawRoadArrow = (x: number, y: number, angle: number, icon: string) => {
+        c.save();
+        c.translate(x, y);
+        c.rotate(angle);
+        c.fillStyle = '#B8C0CC';
+        c.font = '700 24px "Material Symbols Outlined"';
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillText(icon, 0, 0);
+        c.restore();
+      };
 
-        const drawLaneMarkers = (x: number, y: number, length: number, horizontal: boolean) => {
-          if (horizontal) {
-            bCtx.moveTo(x, y); bCtx.lineTo(x + length, y);
-          } else {
-            bCtx.moveTo(x, y); bCtx.lineTo(x, y + length);
-          }
-        };
+      const drawStaticLabel = (label: string, x: number, y: number) => {
+        c.fillStyle = '#FFFFFF';
+        c.textAlign = 'left';
+        c.textBaseline = 'top';
+        c.font = 'bold 12px "JetBrains Mono"';
+        c.fillText(label, x, y);
+      };
 
-        bCtx.setLineDash([]);
-        bCtx.lineWidth = 2;
-        bCtx.strokeStyle = '#444c56';
-        bCtx.beginPath();
-        bCtx.moveTo(centerX - 2, 0); bCtx.lineTo(centerX - 2, centerY - INTERSECTION_SIZE / 2);
-        bCtx.moveTo(centerX + 2, 0); bCtx.lineTo(centerX + 2, centerY - INTERSECTION_SIZE / 2);
-        bCtx.moveTo(centerX - 2, centerY + INTERSECTION_SIZE / 2); bCtx.lineTo(centerX - 2, CANVAS_SIZE);
-        bCtx.moveTo(centerX + 2, centerY + INTERSECTION_SIZE / 2); bCtx.lineTo(centerX + 2, CANVAS_SIZE);
-        bCtx.moveTo(0, centerY - 2); bCtx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY - 2);
-        bCtx.moveTo(0, centerY + 2); bCtx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY + 2);
-        bCtx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY - 2); bCtx.lineTo(CANVAS_SIZE, centerY - 2);
-        bCtx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY + 2); bCtx.lineTo(CANVAS_SIZE, centerY + 2);
-        bCtx.stroke();
+      drawStaticLabel('NORTHBOUND', centerX + INTERSECTION_SIZE / 2 + 20, CANVAS_SIZE - 60);
+      drawStaticLabel('SOUTHBOUND', centerX - INTERSECTION_SIZE / 2 - 140, 40);
+      drawStaticLabel('EASTBOUND', 40, centerY + INTERSECTION_SIZE / 2 + 20);
+      drawStaticLabel('WESTBOUND', CANVAS_SIZE - 160, centerY - INTERSECTION_SIZE / 2 - 40);
 
-        bCtx.strokeStyle = '#2D333B';
-        bCtx.lineWidth = 1;
-        bCtx.setLineDash([20, 20]);
-        bCtx.beginPath();
-        [LANE_WIDTH, LANE_WIDTH * 2].forEach(offset => {
-          drawLaneMarkers(centerX + offset, 0, centerY - INTERSECTION_SIZE / 2, false);
-          drawLaneMarkers(centerX - offset, 0, centerY - INTERSECTION_SIZE / 2, false);
-          drawLaneMarkers(centerX + offset, centerY + INTERSECTION_SIZE / 2, CANVAS_SIZE - (centerY + INTERSECTION_SIZE / 2), false);
-          drawLaneMarkers(centerX - offset, centerY + INTERSECTION_SIZE / 2, CANVAS_SIZE - (centerY + INTERSECTION_SIZE / 2), false);
-          drawLaneMarkers(0, centerY + offset, centerX - INTERSECTION_SIZE / 2, true);
-          drawLaneMarkers(0, centerY - offset, centerX - INTERSECTION_SIZE / 2, true);
-          drawLaneMarkers(centerX + INTERSECTION_SIZE / 2, centerY + offset, CANVAS_SIZE - (centerX + INTERSECTION_SIZE / 2), true);
-          drawLaneMarkers(centerX + INTERSECTION_SIZE / 2, centerY - offset, CANVAS_SIZE - (centerX + INTERSECTION_SIZE / 2), true);
-        });
-        bCtx.stroke();
+      drawRoadArrow(centerX + 20, centerY + 170, 0, 'turn_left');
+      drawRoadArrow(centerX + 60, centerY + 170, 0, 'arrow_upward');
+      drawRoadArrow(centerX + 100, centerY + 170, 0, 'turn_right');
+      drawRoadArrow(centerX - 20, centerY - 170, Math.PI, 'turn_left');
+      drawRoadArrow(centerX - 60, centerY - 170, Math.PI, 'arrow_upward');
+      drawRoadArrow(centerX - 100, centerY - 170, Math.PI, 'turn_right');
+      drawRoadArrow(centerX - 170, centerY + 20, Math.PI/2, 'turn_left');
+      drawRoadArrow(centerX - 170, centerY + 60, Math.PI/2, 'arrow_upward');
+      drawRoadArrow(centerX - 170, centerY + 100, Math.PI/2, 'turn_right');
+      drawRoadArrow(centerX + 170, centerY - 20, -Math.PI/2, 'turn_left');
+      drawRoadArrow(centerX + 170, centerY - 60, -Math.PI/2, 'arrow_upward');
+      drawRoadArrow(centerX + 170, centerY - 100, -Math.PI/2, 'turn_right');
+    };
 
-        bCtx.setLineDash([]);
-        bCtx.lineWidth = 2;
-        bCtx.strokeStyle = '#2D333B';
-        bCtx.beginPath();
-        bCtx.moveTo(centerX - INTERSECTION_SIZE / 2, centerY - STOP_LINE); bCtx.lineTo(centerX + INTERSECTION_SIZE / 2, centerY - STOP_LINE);
-        bCtx.moveTo(centerX - INTERSECTION_SIZE / 2, centerY + STOP_LINE); bCtx.lineTo(centerX + INTERSECTION_SIZE / 2, centerY + STOP_LINE);
-        bCtx.moveTo(centerX - STOP_LINE, centerY - INTERSECTION_SIZE / 2); bCtx.lineTo(centerX - STOP_LINE, centerY + INTERSECTION_SIZE / 2);
-        bCtx.moveTo(centerX + STOP_LINE, centerY - INTERSECTION_SIZE / 2); bCtx.lineTo(centerX + STOP_LINE, centerY + INTERSECTION_SIZE / 2);
-        bCtx.stroke();
+    ctx.fillStyle = '#1A1D23';
+    ctx.fillRect(centerX - INTERSECTION_SIZE / 2, 0, INTERSECTION_SIZE, CANVAS_SIZE);
+    ctx.fillRect(0, centerY - INTERSECTION_SIZE / 2, CANVAS_SIZE, INTERSECTION_SIZE);
+    ctx.fillStyle = '#0D0F12';
+    ctx.fillRect(centerX - INTERSECTION_SIZE / 2, centerY - INTERSECTION_SIZE / 2, INTERSECTION_SIZE, INTERSECTION_SIZE);
+    ctx.strokeStyle = '#2D333B';
+    ctx.lineWidth = 1;
 
-        const drawRoadArrow = (x: number, y: number, angle: number, icon: string) => {
-          bCtx.save();
-          bCtx.translate(x, y);
-          bCtx.rotate(angle);
-          bCtx.fillStyle = '#B8C0CC';
-          bCtx.font = '700 24px "Material Symbols Outlined"';
-          bCtx.textAlign = 'center';
-          bCtx.textBaseline = 'middle';
-          bCtx.fillText(icon, 0, 0);
-          bCtx.restore();
-        };
-
-        const drawStaticLabel = (label: string, x: number, y: number) => {
-          bCtx.fillStyle = '#FFFFFF';
-          bCtx.textAlign = 'left';
-          bCtx.textBaseline = 'top';
-          bCtx.font = 'bold 12px "JetBrains Mono"';
-          bCtx.fillText(label, x, y);
-        };
-
-        drawStaticLabel('NORTHBOUND', centerX + INTERSECTION_SIZE / 2 + 20, CANVAS_SIZE - 60);
-        drawStaticLabel('SOUTHBOUND', centerX - INTERSECTION_SIZE / 2 - 140, 40);
-        drawStaticLabel('EASTBOUND', 40, centerY + INTERSECTION_SIZE / 2 + 20);
-        drawStaticLabel('WESTBOUND', CANVAS_SIZE - 160, centerY - INTERSECTION_SIZE / 2 - 40);
-
-        drawRoadArrow(centerX + 20, centerY + 170, 0, 'turn_left');
-        drawRoadArrow(centerX + 60, centerY + 170, 0, 'arrow_upward');
-        drawRoadArrow(centerX + 100, centerY + 170, 0, 'turn_right');
-        drawRoadArrow(centerX - 20, centerY - 170, Math.PI, 'turn_left');
-        drawRoadArrow(centerX - 60, centerY - 170, Math.PI, 'arrow_upward');
-        drawRoadArrow(centerX - 100, centerY - 170, Math.PI, 'turn_right');
-        drawRoadArrow(centerX - 170, centerY + 20, Math.PI/2, 'turn_left');
-        drawRoadArrow(centerX - 170, centerY + 60, Math.PI/2, 'arrow_upward');
-        drawRoadArrow(centerX - 170, centerY + 100, Math.PI/2, 'turn_right');
-        drawRoadArrow(centerX + 170, centerY - 20, -Math.PI/2, 'turn_left');
-        drawRoadArrow(centerX + 170, centerY - 60, -Math.PI/2, 'arrow_upward');
-        drawRoadArrow(centerX + 170, centerY - 100, -Math.PI/2, 'turn_right');
+    const drawLaneMarkers = (x: number, y: number, length: number, horizontal: boolean) => {
+      if (horizontal) {
+        ctx.moveTo(x, y); ctx.lineTo(x + length, y);
+      } else {
+        ctx.moveTo(x, y); ctx.lineTo(x, y + length);
       }
-      bgCanvasRef.current = bg;
-    }
-    d.bgLazyInit = performance.now() - md;
-    md = performance.now();
+    };
 
-    if (bgCanvasRef.current) {
-      ctx.drawImage(bgCanvasRef.current, 0, 0);
+    ctx.setLineDash([]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#444c56';
+    ctx.beginPath();
+    ctx.moveTo(centerX - 2, 0); ctx.lineTo(centerX - 2, centerY - INTERSECTION_SIZE / 2);
+    ctx.moveTo(centerX + 2, 0); ctx.lineTo(centerX + 2, centerY - INTERSECTION_SIZE / 2);
+    ctx.moveTo(centerX - 2, centerY + INTERSECTION_SIZE / 2); ctx.lineTo(centerX - 2, CANVAS_SIZE);
+    ctx.moveTo(centerX + 2, centerY + INTERSECTION_SIZE / 2); ctx.lineTo(centerX + 2, CANVAS_SIZE);
+    ctx.moveTo(0, centerY - 2); ctx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY - 2);
+    ctx.moveTo(0, centerY + 2); ctx.lineTo(centerX - INTERSECTION_SIZE / 2, centerY + 2);
+    ctx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY - 2); ctx.lineTo(CANVAS_SIZE, centerY - 2);
+    ctx.moveTo(centerX + INTERSECTION_SIZE / 2, centerY + 2); ctx.lineTo(CANVAS_SIZE, centerY + 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#2D333B';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([20, 20]);
+    ctx.beginPath();
+    [LANE_WIDTH, LANE_WIDTH * 2].forEach(offset => {
+      drawLaneMarkers(centerX + offset, 0, centerY - INTERSECTION_SIZE / 2, false);
+      drawLaneMarkers(centerX - offset, 0, centerY - INTERSECTION_SIZE / 2, false);
+      drawLaneMarkers(centerX + offset, centerY + INTERSECTION_SIZE / 2, CANVAS_SIZE - (centerY + INTERSECTION_SIZE / 2), false);
+      drawLaneMarkers(centerX - offset, centerY + INTERSECTION_SIZE / 2, CANVAS_SIZE - (centerY + INTERSECTION_SIZE / 2), false);
+      drawLaneMarkers(0, centerY + offset, centerX - INTERSECTION_SIZE / 2, true);
+      drawLaneMarkers(0, centerY - offset, centerX - INTERSECTION_SIZE / 2, true);
+      drawLaneMarkers(centerX + INTERSECTION_SIZE / 2, centerY + offset, CANVAS_SIZE - (centerX + INTERSECTION_SIZE / 2), true);
+      drawLaneMarkers(centerX + INTERSECTION_SIZE / 2, centerY - offset, CANVAS_SIZE - (centerX + INTERSECTION_SIZE / 2), true);
+    });
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#2D333B';
+    ctx.beginPath();
+    ctx.moveTo(centerX - INTERSECTION_SIZE / 2, centerY - STOP_LINE); ctx.lineTo(centerX + INTERSECTION_SIZE / 2, centerY - STOP_LINE);
+    ctx.moveTo(centerX - INTERSECTION_SIZE / 2, centerY + STOP_LINE); ctx.lineTo(centerX + INTERSECTION_SIZE / 2, centerY + STOP_LINE);
+    ctx.moveTo(centerX - STOP_LINE, centerY - INTERSECTION_SIZE / 2); ctx.lineTo(centerX - STOP_LINE, centerY + INTERSECTION_SIZE / 2);
+    ctx.moveTo(centerX + STOP_LINE, centerY - INTERSECTION_SIZE / 2); ctx.lineTo(centerX + STOP_LINE, centerY + INTERSECTION_SIZE / 2);
+    ctx.stroke();
+
+    if (bgFontsReady) {
+      drawBgGlyphLayer(ctx);
     }
-    d.bgBlit = performance.now() - md;
+    d.bgBase = performance.now() - md;
     md = performance.now();
 
     const drawIntersectionPaths = () => {
@@ -1962,11 +2063,12 @@ phase(4):
   }, [update, draw]);
 
   useEffect(() => {
+    if (introPhase !== null) return;
     requestRef.current = requestAnimationFrame(loop);
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [loop]);
+  }, [loop, introPhase]);
 
   const handlePhaseTimingChange = (phaseIndex: number, val: number) => {
     setPhaseTimings((prev) => {
@@ -2001,7 +2103,57 @@ phase(4):
     });
   }, []);
 
-  const handleCanvasPointerDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const dismissIntroSplash = useCallback(() => setIntroPhase('home'), []);
+
+  const enterGameFromIntro = useCallback(() => {
+    setIntroPhase(null);
+    isPlayingRef.current = true;
+    setIsPlaying(true);
+  }, []);
+
+  const returnToMainMenu = useCallback(() => {
+    setIntroPhase('home');
+    isPlayingRef.current = false;
+    setIsPlaying(false);
+    setExecutionSplitActive(false);
+    setMobileScreen('briefing');
+    inspectPaintRef.current = null;
+    setInspectPanel(null);
+  }, []);
+
+  const handleCanvasWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
+    const zoomDelta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+    setZoom((z) => Math.max(0.5, Math.min(3, z + zoomDelta)));
+  }, []);
+
+  const handleCanvasPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    isDraggingCanvasRef.current = true;
+    hasDraggedRef.current = false;
+    dragStartCanvasRef.current = { x: e.clientX, y: e.clientY };
+    panStartRef.current = pan;
+    (e.target as Element).setPointerCapture(e.pointerId);
+  }, [pan]);
+
+  const handleCanvasPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isDraggingCanvasRef.current) return;
+    const dx = e.clientX - dragStartCanvasRef.current.x;
+    const dy = e.clientY - dragStartCanvasRef.current.y;
+    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+      hasDraggedRef.current = true;
+    }
+    setPan({
+      x: panStartRef.current.x + dx,
+      y: panStartRef.current.y + dy
+    });
+  }, []);
+
+  const handleCanvasPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isDraggingCanvasRef.current) return;
+    isDraggingCanvasRef.current = false;
+    (e.target as Element).releasePointerCapture(e.pointerId);
+
+    if (hasDraggedRef.current) return;
+
     const canvas = canvasRef.current;
     const mainEl = simMainRef.current;
     if (!canvas || !mainEl) return;
@@ -2059,14 +2211,242 @@ phase(4):
   const cycleLength = Array.from({ length: phaseRowCount }, (_, i) => phaseTimings[i] ?? DEFAULT_PHASE_GREEN_SECONDS).reduce((a, b) => a + b, 0);
   const sidebarColumnWidth = sidebarCollapsed ? 0 : sidebarWidth;
 
+  const engineeringTemplateBlurb = useMemo(() => {
+    const preset = PHASE_TEMPLATES.find(t => t.code === programCode);
+    if (preset) {
+      return { title: `${preset.shortLabel} — ${preset.name.toUpperCase()}`, body: preset.detail };
+    }
+    if (userTemplate && programCode === userTemplate) {
+      return { title: 'CUSTOM', body: 'Phase program stored on this device. Save from the editor to refresh the stored copy.' };
+    }
+    return { title: 'PROGRAM', body: 'Current text does not match a preset. Select CUSTOM or a template to load a defined program.' };
+  }, [programCode, userTemplate]);
+
+  if (introPhase !== null) {
+    return (
+      <GameIntro
+        phase={introPhase}
+        onDismissSplash={dismissIntroSplash}
+        onEnterGame={enterGameFromIntro}
+      />
+    );
+  }
+
+  if (isMobilePortrait) {
+    return (
+      <div className="h-[100dvh] w-full flex flex-col bg-[#0D0F12] overflow-hidden border-2 border-[#2D333B] relative crt-bezel">
+        <header className="shrink-0 bg-[#1A1D23] border-b-2 border-[#2D333B] px-3 py-2 flex items-center justify-between z-10 shadow-md gap-2">
+          <div className="flex items-center gap-2 font-mono font-bold tracking-wider text-[11px] min-w-0">
+            <span className="text-[#3FB950] shrink-0 animate-pulse">●</span>
+            <span className="text-[#C9D1D9] truncate">TRAFFIC_SEC_082</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={returnToMainMenu}
+              className="rounded border border-[#2D333B] px-2 py-1 text-[9px] font-mono font-bold text-[#8B949E] hover:border-[#3FB950]/50 hover:text-[#3FB950] transition-colors"
+            >
+              MENU
+            </button>
+            <div className="font-mono text-[10px] text-[#C9D1D9] text-right">
+              {isPlaying ? 'ACTIVE' : 'PAUSED'} | CYCLE: {cycleLength}s
+            </div>
+          </div>
+        </header>
+
+        <div className="flex-1 min-h-0 relative">
+          <div className={`absolute inset-0 z-20 transition-opacity duration-300 ${!executionSplitActive && mobileScreen === 'briefing' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+            <BriefingTab />
+          </div>
+
+          <div className={`absolute inset-0 z-20 bg-[#0D0F12] overflow-y-auto transition-opacity duration-300 ${!executionSplitActive && mobileScreen === 'engineering' ? 'opacity-100' : 'opacity-0 pointer-events-none'} p-2`}>
+            <div className="flex flex-col gap-2 h-full">
+              <div className="flex items-center justify-between gap-1 mb-1">
+                 <button onClick={() => applyTemplate(userTemplate)} className={`flex-1 text-[10px] py-1.5 rounded-none font-mono border transition-all ${programCode === userTemplate ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}>CUSTOM</button>
+                 <button onClick={saveUserTemplate} className="px-3 py-1.5 rounded-none bg-black/20 border border-[#2D333B] text-[#C9D1D9] hover:text-[#3FB950] transition-colors"><Save size={14} /></button>
+                 <div className="w-[1px] h-5 bg-[#2D333B] mx-1" />
+                 {PHASE_TEMPLATES.map((t) => (
+                    <button key={t.name} onClick={() => applyTemplate(t.code)} className={`flex-1 text-[10px] py-1.5 rounded-none font-mono border transition-all ${programCode === t.code ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}>{t.shortLabel}</button>
+                 ))}
+              </div>
+              <div className="flex flex-col gap-1">
+                <div className="text-[10px] text-[#3FB950] font-mono uppercase tracking-wide leading-tight">{engineeringTemplateBlurb.title}</div>
+                <div className="text-[10px] text-[#8B949E] font-mono leading-snug">{engineeringTemplateBlurb.body}</div>
+              </div>
+              <div className="flex-1 min-h-[40vh] relative border-2 border-[#2D333B] rounded-none focus-within:border-[#3FB950] transition-colors overflow-hidden">
+                <Editor
+                  height="100%"
+                  defaultLanguage="python"
+                  theme="vs-dark"
+                  value={programCode}
+                  onChange={(val) => setProgramCode(val || '')}
+                  options={{ minimap: { enabled: false }, lineNumbers: "off", fontSize: 13, fontFamily: "'JetBrains Mono', monospace", scrollBeyondLastLine: false, wordWrap: "on", padding: { top: 8, bottom: 8 } }}
+                />
+              </div>
+              {programError && (
+                <div className="text-[11px] text-[#F85149] font-mono whitespace-pre-wrap leading-tight bg-[#F85149]/10 p-2 border border-[#F85149]/30">
+                  {programError}
+                </div>
+              )}
+              <div className="mt-auto pt-2 pb-2">
+                <button 
+                  onClick={() => {
+                      compile();
+                      addLog("PROGRAM UPDATED", "var(--green)");
+                      if (!programError) {
+                        setExecutionSplitActive(true);
+                        setSessionCarsCleared(0);
+                        setSessionCrashes(0);
+                        setSessionTime(0);
+                        setZoom(0.8);
+                      }
+                  }}
+                  className="w-full text-[14px] bg-[#3FB950]/20 text-[#3FB950] py-3 border-2 border-[#3FB950] rounded-none font-bold uppercase tracking-wider shadow-[0_0_15px_rgba(63,185,80,0.15)]"
+                >
+                  COMPILE & RUN
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <main 
+            ref={simMainRef}
+            className={`absolute left-0 w-full transition-all duration-500 ease-in-out flex items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]
+              ${executionSplitActive ? 'top-0 h-[50%] border-b-2 border-[#2D333B] z-10' : 'top-0 h-full z-0'} 
+              ${!executionSplitActive && mobileScreen !== 'execution' ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+            `}
+          >
+            <div className="absolute top-4 left-4 z-20 flex gap-2">
+              <button onClick={togglePlayback} className={`p-2 rounded-none border shadow-xl ${isPlaying ? 'border-[#D29922]/60 bg-[#D29922]/15 text-[#D29922]' : 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950]'}`}>
+                {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+              </button>
+              {TIME_SCALE_OPTIONS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setTimeScale(s)}
+                  className={`min-w-[2rem] py-1.5 px-2 rounded-none text-[10px] font-mono font-bold border transition-all shadow-xl ${
+                    timeScale === s
+                      ? 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950]'
+                      : 'border-[#2D333B] bg-[#1A1D23] text-[#8B949E] hover:border-[#3FB950]/50 hover:text-[#C9D1D9]'
+                  }`}
+                >
+                  {s}x
+                </button>
+              ))}
+            </div>
+            <div className="absolute top-4 right-4 z-20 flex flex-col gap-2">
+              <button
+                onClick={() => setZoom((z) => Math.min(3, z + ZOOM_STEP))}
+                className="p-1.5 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
+                title="Zoom In"
+              >
+                <Plus size={16} />
+              </button>
+              <button
+                onClick={() => setZoom((z) => Math.max(0.5, z - ZOOM_STEP))}
+                className="p-1.5 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
+                title="Zoom Out"
+              >
+                <Minus size={16} />
+              </button>
+              <button
+                onClick={() => {
+                  setZoom(executionSplitActive ? 0.8 : defaultZoom());
+                  setPan({ x: 0, y: 0 });
+                }}
+                className="py-1 px-1 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[10px] font-mono text-[#8B949E] hover:text-white transition-all shadow-xl"
+              >
+                RST
+              </button>
+            </div>
+            <canvas 
+              ref={canvasRef} 
+              width={CANVAS_SIZE} 
+              height={CANVAS_SIZE}
+              onPointerDown={handleCanvasPointerDown}
+              onPointerMove={handleCanvasPointerMove}
+              onPointerUp={handleCanvasPointerUp}
+              onPointerCancel={handleCanvasPointerUp}
+              onWheel={handleCanvasWheel}
+              style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transition: isDraggingCanvasRef.current ? 'none' : 'transform 0.15s ease-out' }}
+              className="box-border max-h-[min(90vw,100%)] max-w-[min(90vw,100%)] aspect-square w-full rounded-none border border-[#2D333B] shadow-2xl touch-none"
+            />
+          </main>
+
+          <div className={`absolute left-0 bottom-0 w-full h-[50%] z-20 bg-[#0D0F12] flex flex-col transition-transform duration-500 ease-in-out ${executionSplitActive ? 'translate-y-0' : 'translate-y-[100%]'}`}>
+            <div className="flex bg-[#1A1D23] border-b-2 border-[#2D333B]">
+              <div className="flex-1 p-2 border-r-2 border-[#2D333B] flex flex-col items-center">
+                <span className="text-[9px] text-[#8B949E] font-mono">CLEARED</span>
+                <span className="text-[16px] text-[#3FB950] font-mono font-bold">{sessionCarsCleared}</span>
+              </div>
+              <div className="flex-1 p-2 border-r-2 border-[#2D333B] flex flex-col items-center">
+                <span className="text-[9px] text-[#8B949E] font-mono">CRASHES</span>
+                <span className={`text-[16px] font-mono font-bold ${sessionCrashes > 0 ? 'text-[#F85149]' : 'text-[#8B949E]'}`}>{sessionCrashes}</span>
+              </div>
+              <div className="flex-1 p-2 flex flex-col items-center">
+                <span className="text-[9px] text-[#8B949E] font-mono">TIME</span>
+                <span className="text-[16px] text-[#58A6FF] font-mono font-bold">{Math.floor(sessionTime / 60).toString().padStart(2, '0')}:{(sessionTime % 60).toString().padStart(2, '0')}</span>
+              </div>
+            </div>
+            <div className="flex-1 min-h-0 relative bg-[#0D0F12]">
+              <Editor
+                height="100%"
+                defaultLanguage="python"
+                theme="vs-dark"
+                value={programCode}
+                options={{ readOnly: true, minimap: { enabled: false }, lineNumbers: "on", fontSize: 11, fontFamily: "'JetBrains Mono', monospace", scrollBeyondLastLine: false, wordWrap: "on", padding: { top: 8, bottom: 8 } }}
+                onMount={handleEditorDidMount}
+              />
+            </div>
+            <div className="p-2 bg-[#1A1D23] border-t-2 border-[#2D333B]">
+               <button onClick={() => setExecutionSplitActive(false)} className="w-full py-2 border-2 border-[#F85149] bg-[#F85149]/10 text-[#F85149] font-mono font-bold text-[12px] uppercase">STOP / EDIT</button>
+            </div>
+          </div>
+        </div>
+
+        {!executionSplitActive && (
+          <nav className="shrink-0 h-[60px] bg-[#1A1D23] border-t-2 border-[#2D333B] flex z-30 relative">
+             <button onClick={() => setMobileScreen('briefing')} className={`flex-1 flex flex-col items-center justify-center gap-1 font-mono text-[10px] ${mobileScreen === 'briefing' ? 'text-[#3FB950] bg-white/5 border-t-2 border-[#3FB950]' : 'text-[#8B949E] border-t-2 border-transparent'}`}><Mail size={20}/>BRIEFING</button>
+             <button onClick={() => setMobileScreen('engineering')} className={`flex-1 flex flex-col items-center justify-center gap-1 font-mono text-[10px] ${mobileScreen === 'engineering' ? 'text-[#3FB950] bg-white/5 border-t-2 border-[#3FB950]' : 'text-[#8B949E] border-t-2 border-transparent'}`}><Terminal size={20}/>ENGINEERING</button>
+             <button onClick={() => setMobileScreen('execution')} className={`flex-1 flex flex-col items-center justify-center gap-1 font-mono text-[10px] ${mobileScreen === 'execution' ? 'text-[#3FB950] bg-white/5 border-t-2 border-[#3FB950]' : 'text-[#8B949E] border-t-2 border-transparent'}`}><MapIcon size={20}/>EXECUTION</button>
+          </nav>
+        )}
+
+        <AnimatePresence>
+          {crashInfo && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+              <div className="w-full max-w-sm rounded-none border-2 border-[#F85149] bg-[#1A1D23] p-6 shadow-[0_0_30px_rgba(248,81,73,0.3)]">
+                <div className="text-center">
+                  <div className="text-[11px] font-mono tracking-[0.2em] text-[#F85149]/80">INCIDENT</div>
+                  <h2 className="mt-2 text-2xl font-mono font-bold text-[#F85149]">CRASH DETECTED</h2>
+                  <div className="mt-4 rounded-none border border-[#2D333B] bg-black/40 px-3 py-2 text-left font-mono text-xs text-[#C9D1D9]">
+                    <div className="text-[#8B949E]">CRASHED LANES</div>
+                    <div className="mt-1 text-[#F85149]">{crashInfo.laneA.toUpperCase()} × {crashInfo.laneB.toUpperCase()}</div>
+                  </div>
+                  <div className="mt-5 flex flex-col gap-2">
+                    <button onClick={() => resetSimulation('CRASH')} className="w-full border-2 border-[#F85149] bg-[#F85149]/15 py-3 text-[13px] font-mono font-bold text-[#F85149] uppercase">RESET SIMULATION</button>
+                    {executionSplitActive && (
+                      <button onClick={() => { resetSimulation('CRASH'); setExecutionSplitActive(false); setMobileScreen('engineering'); }} className="w-full border-2 border-[#2D333B] bg-black/20 py-2 text-[11px] font-mono text-[#C9D1D9] uppercase">RETURN TO EDITOR</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`h-screen w-full grid grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-[#0D0F12] ${isResizingSidebar ? '' : 'transition-[grid-template-columns] duration-300 ease-in-out'}`}
       style={{ gridTemplateColumns: `${sidebarColumnWidth}px minmax(0,1fr)` }}
     >
       {/* Header Area */}
-      <header className="col-span-full bg-[#1A1D23] border-b border-[#2D333B] flex items-center justify-between px-4 z-10">
-        <div className="flex items-center gap-3 font-mono font-bold tracking-wider text-xs">
+      <header className="col-span-full bg-[#1A1D23] border-b border-[#2D333B] flex items-center justify-between px-4 z-10 gap-3">
+        <div className="flex items-center gap-3 font-mono font-bold tracking-wider text-xs min-w-0 flex-wrap">
           <button 
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             className="p-1.5 hover:bg-white/5 rounded transition-colors text-[#C9D1D9] hover:text-white flex items-center justify-center"
@@ -2075,8 +2455,15 @@ phase(4):
             {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
           <span className="text-[#3FB950] shrink-0">●</span>
-          <span>TRAFFIC_SEC_082_V4.2</span>
-          <span className="bg-[#3FB950]/10 text-[#3FB950] px-2 py-0.5 rounded border border-[#3FB950] text-[11px]">OPERATIONAL</span>
+          <span className="truncate">TRAFFIC_SEC_082_V4.2</span>
+          <span className="bg-[#3FB950]/10 text-[#3FB950] px-2 py-0.5 rounded border border-[#3FB950] text-[11px] shrink-0">OPERATIONAL</span>
+          <button
+            type="button"
+            onClick={returnToMainMenu}
+            className="shrink-0 rounded border border-[#2D333B] px-2.5 py-1 text-[10px] font-mono font-bold text-[#8B949E] hover:border-[#3FB950]/50 hover:text-[#3FB950] transition-colors"
+          >
+            MENU
+          </button>
         </div>
         <div className="font-mono text-xs text-[#C9D1D9] flex flex-wrap items-center justify-end gap-x-4 gap-y-1 sm:gap-x-6">
           {installDeferred && !isStandaloneDisplay && (
@@ -2194,18 +2581,17 @@ phase(4):
                   className={`flex-1 text-[10px] py-1 rounded font-mono border transition-all ${programCode === userTemplate ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}
                   title={userTemplate ? "Load Saved Template" : "No saved template"}
                 >
-                  USR
+                  CUSTOM
                 </button>
                 <button 
                   onClick={saveUserTemplate}
                   className="px-2 py-1 rounded bg-black/20 border border-[#2D333B] text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/40 transition-colors"
-                  title="Save current as USR"
+                  title="Save current as CUSTOM"
                 >
                   <Save size={12} />
                 </button>
                 <div className="w-[1px] h-4 bg-[#2D333B] mx-0.5" />
-                {PHASE_TEMPLATES.map((t, i) => {
-                  const shortNames = ['STD', 'ART', 'SWP', 'ADV'];
+                {PHASE_TEMPLATES.map((t) => {
                   const isActive = programCode === t.code;
                   return (
                     <button 
@@ -2214,7 +2600,7 @@ phase(4):
                       className={`flex-1 text-[10px] py-1 rounded font-mono border transition-all ${isActive ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}
                       title={t.name}
                     >
-                      {shortNames[i]}
+                      {t.shortLabel}
                     </button>
                   );
                 })}
@@ -2477,24 +2863,30 @@ phase(4):
               <Minus size={18} />
             </button>
             <button
-              onClick={() => setZoom(defaultZoom())}
+              onClick={() => {
+                setZoom(defaultZoom());
+                setPan({ x: 0, y: 0 });
+              }}
               className="py-1 px-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[10px] font-mono text-[#8B949E] hover:text-white transition-all shadow-xl"
             >
               RESET
             </button>
           </div>
         </div>
-        <div className="flex items-center justify-center w-full h-full overflow-auto">
+        <div className="flex items-center justify-center w-full h-full overflow-hidden">
           <canvas 
             ref={canvasRef} 
             width={CANVAS_SIZE} 
             height={CANVAS_SIZE}
             onPointerDown={handleCanvasPointerDown}
+            onPointerMove={handleCanvasPointerMove}
+            onPointerUp={handleCanvasPointerUp}
+            onPointerCancel={handleCanvasPointerUp}
             style={{ 
-              transform: `scale(${zoom})`,
-              transition: 'transform 0.15s ease-out'
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transition: isDraggingCanvasRef.current ? 'none' : 'transform 0.15s ease-out'
             }}
-            className="box-border max-h-[min(70vh,100%)] max-w-[min(70vh,100%)] aspect-square w-full cursor-crosshair rounded border border-[#2D333B] shadow-2xl"
+            className="box-border max-h-[min(70vh,100%)] max-w-[min(70vh,100%)] aspect-square w-full cursor-crosshair rounded border border-[#2D333B] shadow-2xl touch-none"
           />
         </div>
         {inspectPanel && (
