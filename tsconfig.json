@@ -22,6 +22,12 @@
       ]
     },
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    "types": [
+      "vite/client",
+      "react",
+      "react-dom",
+      "vite-plugin-pwa/react"
+    ]
   }
 }

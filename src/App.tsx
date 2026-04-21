@@ -5,13 +5,20 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Save, Plus, Minus } from 'lucide-react';
+import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Save, Plus, Minus, Trash2, Download } from 'lucide-react';
+import Editor, { useMonaco } from '@monaco-editor/react';
 import { Movement, Vehicle, Lane, LightState, MovementTiming, VehicleType } from './types';
-import { parseTrafficProgram, Phase } from './interpreter';
+import { parseTrafficProgram, Phase, ConditionalRule, PhaseCommand, KEYWORD_MAP } from './interpreter';
 import { CANVAS_SIZE, INTERSECTION_SIZE, LANE_WIDTH, LANES, DEFAULT_TIMINGS, DEFAULT_PHASE_GREEN_SECONDS, DEFAULT_BUILTIN_PHASE_TIMINGS, BASE_SPAWN_RATE, SPAWN_DRIFT_SPEED, MIN_PHASE_GREEN_SECONDS, MAX_TOTAL_LOOP_SECONDS, clampPhaseTimingsToLoopCap, PHASE_TEMPLATES } from './constants';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import vehicleCatalog from './vehicles.json';
 import { renderVehicleSprite } from './renderVehicleDesign';
+import { FirmwareUpdatePrompt } from './components/FirmwareUpdatePrompt';
+
+type BeforeInstallPromptEventExtended = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+};
 
 const STOP_LINE = INTERSECTION_SIZE / 2 + 10;
 const BASE_SAFE_GAP = 25;
@@ -21,6 +28,30 @@ const VEHICLE_COLORS = vehicleCatalog.colors;
 const VIEWPORT_MOBILE_MAX_WIDTH = 767;
 const ZOOM_STEP = 0.1;
 const MOBILE_EXTRA_ZOOM_STEPS = 2;
+const SIDEBAR_DEFAULT_WIDTH = 280;
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 520;
+const HEAT_GRID_COLS = 48;
+const HEAT_GRID_ROWS = 48;
+const HEATMAP_DECAY = 0.985;
+const HEATMAP_GAIN = 0.28;
+const HEATMAP_MAX = 24;
+const LOOP_LAG_LOG_MS = 20;
+const LOOP_HUD_MIN_INTERVAL_MS = 100;
+const MAX_SIM_INTEGRATION_STEP = 1;
+const ADJACENT_RIGHT_MERGE_PAIR_KEYS = new Set([
+  'eb-right|nb-right',
+  'eb-right|sb-right',
+  'nb-right|wb-right',
+  'sb-right|wb-right',
+]);
+const ADJACENT_LEFT_MERGE_PAIR_KEYS = new Set([
+  'eb-left|wb-left',
+  'nb-left|sb-left',
+  'sb-left|wb-left',
+]);
+const TIME_SCALE_OPTIONS = [1, 2, 5] as const;
+type TimeScale = (typeof TIME_SCALE_OPTIONS)[number];
 
 function narrowViewport() {
   return typeof window !== 'undefined' && window.matchMedia(`(max-width: ${VIEWPORT_MOBILE_MAX_WIDTH}px)`).matches;
@@ -44,19 +75,25 @@ const MovementLabels: Record<number, string> = {
   [Movement.EASTBOUND_LEFT]: 'EAST_LEFT',
   [Movement.EASTBOUND_STRAIGHT]: 'EAST_STRAIGHT',
   [Movement.EASTBOUND_RIGHT]: 'EAST_RIGHT',
+  [Movement.CROSSWALK_NORTH]: 'CROSSWALK_NORTH',
+  [Movement.CROSSWALK_SOUTH]: 'CROSSWALK_SOUTH',
+  [Movement.CROSSWALK_EAST]: 'CROSSWALK_EAST',
+  [Movement.CROSSWALK_WEST]: 'CROSSWALK_WEST',
 };
 
-const DIRECTIONS = ['NORTHBOUND', 'SOUTHBOUND', 'EASTBOUND', 'WESTBOUND'] as const;
+const DIRECTIONS = ['NORTHBOUND', 'SOUTHBOUND', 'EASTBOUND', 'WESTBOUND', 'PEDESTRIAN'] as const;
 
 function getDirection(m: Movement) {
     if (m >= 1 && m <= 3) return 'NORTHBOUND';
     if (m >= 7 && m <= 9) return 'SOUTHBOUND';
     if (m >= 10 && m <= 12) return 'EASTBOUND';
     if (m >= 4 && m <= 6) return 'WESTBOUND';
+    if (m >= 13 && m <= 16) return 'PEDESTRIAN';
     return 'OTHER';
 }
 
 function getMovementIcon(m: Movement, size: number = 14) {
+    if (m >= 13 && m <= 16) return <Activity size={size} />;
     const type = m % 3;
     if (type === 1) return <CornerUpLeft size={size} />;
     if (type === 2) return <ArrowUp size={size} />;
@@ -72,6 +109,42 @@ function formatActiveMovements(activeMovements: Movement[]): string {
 interface LogEntry { id: string; time: string; event: string; color?: string; }
 interface HistoryEntry { time: string; P1: number; P2: number; P3: number; P4: number; }
 interface QueueHistoryEntry { time: string; [key: string]: string | number; }
+interface Point2D { x: number; y: number; }
+interface RearTires { left: Point2D; right: Point2D; }
+interface SkidMarkSegment {
+  from: Point2D;
+  to: Point2D;
+  bornAt: number;
+  ttlMs: number;
+  baseAlpha: number;
+  width: number;
+}
+interface CrashInfo {
+  x: number;
+  y: number;
+  laneA: string;
+  laneB: string;
+  vehicleIds: [string, string];
+}
+
+const SKID_MARK_BRAKE_THRESHOLD = 0.8;
+const SKID_MARK_TTL_MS = 2800;
+const MAX_SKID_MARK_SEGMENTS = 2400;
+
+function getRearTirePositions(vehicle: Vehicle): RearTires {
+  const forwardX = Math.cos(vehicle.angle);
+  const forwardY = Math.sin(vehicle.angle);
+  const lateralX = -forwardY;
+  const lateralY = forwardX;
+  const rearOffset = vehicle.length * 0.32;
+  const tireOffset = vehicle.width * 0.28;
+  const rearCenterX = vehicle.x - forwardX * rearOffset;
+  const rearCenterY = vehicle.y - forwardY * rearOffset;
+  return {
+    left: { x: rearCenterX + lateralX * tireOffset, y: rearCenterY + lateralY * tireOffset },
+    right: { x: rearCenterX - lateralX * tireOffset, y: rearCenterY - lateralY * tireOffset },
+  };
+}
 
 // Memoized Sub-components to prevent flickering from frequent App re-renders
 type PathGeometry = 
@@ -96,6 +169,81 @@ function getPathGeometry(lane: Lane, centerX: number, centerY: number): PathGeom
     if (lane.direction === 'W') return { type: 'ARC', centerX: centerX + 120, centerY: centerY - 120, radius: 20, startAngle: Math.PI / 2, endAngle: Math.PI, counterClockwise: false };
   }
   return { type: 'STRAIGHT', startX: 0, startY: 0, endX: 0, endY: 0 };
+}
+
+function getPathEndPoint(geom: PathGeometry): Point2D {
+  if (geom.type === 'STRAIGHT') return { x: geom.endX, y: geom.endY };
+  return {
+    x: geom.centerX + geom.radius * Math.cos(geom.endAngle),
+    y: geom.centerY + geom.radius * Math.sin(geom.endAngle),
+  };
+}
+
+function pickVehicleAtCanvasPoint(px: number, py: number, vehicles: Vehicle[]): Vehicle | null {
+  for (let i = vehicles.length - 1; i >= 0; i--) {
+    const v = vehicles[i];
+    const halfLen = v.vType === 'MOTORCYCLE' ? (v.length * 1.25) / 2 : v.length / 2;
+    const halfWid = v.vType === 'MOTORCYCLE' ? (v.width * 1.25) / 2 : v.width / 2;
+    const dx = px - v.x;
+    const dy = py - v.y;
+    const c = Math.cos(-v.angle);
+    const s = Math.sin(-v.angle);
+    const lx = dx * c - dy * s;
+    const ly = dx * s + dy * c;
+    const pad = 6;
+    if (Math.abs(lx) <= halfLen + pad && Math.abs(ly) <= halfWid + pad) return v;
+  }
+  return null;
+}
+
+function VehicleInspectTooltip({ vehicle }: { vehicle: Vehicle }) {
+  const lane = LANE_MAP.get(vehicle.laneId);
+  const movementLabel = lane ? MovementLabels[lane.movement] ?? String(lane.movement) : vehicle.laneId;
+  const speed = Math.hypot(vehicle.vx, vehicle.vy);
+  const angDeg = (vehicle.angle * 180) / Math.PI;
+  const rows: [string, string][] = [
+    ['id', vehicle.id],
+    ['lane', vehicle.laneId],
+    ['movement', movementLabel],
+    ['type', vehicle.vType],
+    ['x', vehicle.x.toFixed(1)],
+    ['y', vehicle.y.toFixed(1)],
+    ['vx', vehicle.vx.toFixed(2)],
+    ['vy', vehicle.vy.toFixed(2)],
+    ['speed', speed.toFixed(2)],
+    ['angleDeg', angDeg.toFixed(1)],
+    ['cruise', vehicle.cruiseSpeed.toFixed(2)],
+    ['accel', vehicle.accel.toFixed(2)],
+    ['decel', vehicle.decel.toFixed(2)],
+    ['brake', String(vehicle.brakeIntensity ?? 0)],
+    ['delay', vehicle.startDelay.toFixed(2)],
+    ['color', vehicle.color],
+    ['size', `${vehicle.length.toFixed(0)}×${vehicle.width.toFixed(0)}`],
+    ['skins', [vehicle.legendarySkin && 'LEG', vehicle.rareSkin && 'RARE'].filter(Boolean).join(' ') || '—'],
+  ];
+  if (vehicle.targetLaneId) rows.push(['targetLane', vehicle.targetLaneId]);
+  if (vehicle.isTurning) {
+    rows.push(['turn', 'on']);
+    rows.push(['turnProgress', (vehicle.turnProgress ?? 0).toFixed(3)]);
+    if (vehicle.turnRadius != null) rows.push(['turnR', vehicle.turnRadius.toFixed(1)]);
+    if (vehicle.turnCenterX != null) rows.push(['turnCx', vehicle.turnCenterX.toFixed(1)]);
+    if (vehicle.turnCenterY != null) rows.push(['turnCy', vehicle.turnCenterY.toFixed(1)]);
+  } else {
+    rows.push(['turn', 'off']);
+  }
+  return (
+    <div className="pointer-events-auto max-h-[min(70vh,420px)] overflow-y-auto rounded border border-[#58A6FF]/50 bg-[#1A1D23]/98 p-3 font-mono text-[11px] text-[#C9D1D9] shadow-2xl scrollbar-hide">
+      <div className="border-b border-[#2D333B] pb-2 text-[10px] font-bold tracking-wider text-[#58A6FF]">VEHICLE STATE</div>
+      <div className="mt-2 space-y-1">
+        {rows.map(([k, val]) => (
+          <div key={k} className="flex justify-between gap-6">
+            <span className="text-[#8B949E]">{k}</span>
+            <span className="text-right text-[#C9D1D9]">{val}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 const TrafficFlowRates = React.memo(({ rates }: { rates: Record<string, number> }) => (
@@ -214,12 +362,13 @@ const BadgeView = React.memo(({ phases, currentPhase }: { phases: Phase[], curre
         <div className="flex flex-col gap-3 py-1">
             {phases.map((phase, i) => {
                 const isActive = i === (currentPhase % phases.length);
-                const groupedMovements = phase.movements.reduce((acc, m) => {
+                const groupedCommands = phase.commands.reduce((acc, cmd) => {
+                    const m = cmd.target;
                     const dir = getDirection(m);
                     if (!acc[dir]) acc[dir] = [];
-                    acc[dir].push(m);
+                    acc[dir].push(cmd);
                     return acc;
-                }, {} as Record<string, Movement[]>);
+                }, {} as Record<string, PhaseCommand[]>);
 
                 return (
                     <div 
@@ -239,12 +388,12 @@ const BadgeView = React.memo(({ phases, currentPhase }: { phases: Phase[], curre
                         
                         <div className="flex flex-col gap-1.5">
                             {DIRECTIONS.map(dir => {
-                                const movements = groupedMovements[dir];
-                                if (!movements || movements.length === 0) return null;
-                                // Sort movements to ensure (LEFT, STRAIGHT, RIGHT) order
-                                const sortedMovements = [...movements].sort((a, b) => {
-                                    const valA = a % 3 === 0 ? 3 : a % 3;
-                                    const valB = b % 3 === 0 ? 3 : b % 3;
+                                const commands = groupedCommands[dir];
+                                if (!commands || commands.length === 0) return null;
+                                // Sort commands to ensure (LEFT, STRAIGHT, RIGHT) order
+                                const sortedCommands = [...commands].sort((a, b) => {
+                                    const valA = a.target % 3 === 0 ? 3 : a.target % 3;
+                                    const valB = b.target % 3 === 0 ? 3 : b.target % 3;
                                     return valA - valB;
                                 });
 
@@ -254,21 +403,27 @@ const BadgeView = React.memo(({ phases, currentPhase }: { phases: Phase[], curre
                                             {dir.replace('BOUND', '')}
                                         </div>
                                         <div className="flex gap-1">
-                                            {sortedMovements.map(m => (
+                                            {sortedCommands.map(cmd => {
+                                                const isYield = cmd.action === 'YIELD';
+                                                const activeClass = isYield 
+                                                    ? 'bg-[#D29922]/20 border-[#D29922]/30 text-[#D29922]' 
+                                                    : 'bg-[#3FB950]/20 border-[#3FB950]/30 text-[#3FB950]';
+                                                const inactiveClass = 'bg-[#1A1D23] border-[#2D333B] text-[#C9D1D9]';
+                                                return (
                                                 <span 
-                                                    key={m} 
-                                                    title={MovementLabels[m]}
-                                                    className={`flex items-center justify-center w-7 h-7 rounded border font-mono transition-colors ${isActive ? 'bg-[#3FB950]/20 border-[#3FB950]/30 text-[#3FB950]' : 'bg-[#1A1D23] border-[#2D333B] text-[#C9D1D9]'}`}
+                                                    key={cmd.target} 
+                                                    title={MovementLabels[cmd.target]}
+                                                    className={`flex items-center justify-center w-7 h-7 rounded border font-mono transition-colors ${isActive ? activeClass : inactiveClass}`}
                                                 >
-                                                    {getMovementIcon(m)}
-                                                    <span className="sr-only">{MovementLabels[m]?.replace(/^[A-Z]+_/, '')}</span>
+                                                    {getMovementIcon(cmd.target)}
+                                                    <span className="sr-only">{MovementLabels[cmd.target]?.replace(/^[A-Z]+_/, '')}</span>
                                                 </span>
-                                            ))}
+                                            )})}
                                         </div>
                                     </div>
                                 );
                             })}
-                            {phase.movements.length === 0 && (
+                            {phase.commands.length === 0 && (
                                 <span className="text-xs text-gray-400 font-mono italic">NO_MOVEMENTS</span>
                             )}
                         </div>
@@ -320,7 +475,19 @@ const CollapsibleSection = React.memo(({
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const simMainRef = useRef<HTMLElement | null>(null);
+  const inspectPaintRef = useRef<Vehicle | null>(null);
+  const [inspectPanel, setInspectPanel] = useState<{ vehicle: Vehicle; left: number; top: number } | null>(null);
   const [isPlaying, setIsPlaying] = useState(true);
+  const isPlayingRef = useRef(true);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+  useEffect(() => {
+    if (!isPlaying) return;
+    inspectPaintRef.current = null;
+    setInspectPanel(null);
+  }, [isPlaying]);
   const [phaseTimings, setPhaseTimings] = useState<number[]>(() => [...DEFAULT_BUILTIN_PHASE_TIMINGS]);
   
   // Traffic Flow State
@@ -332,6 +499,10 @@ export default function App() {
   
   // UI State
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => narrowViewport());
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const resizeStartXRef = useRef(0);
+  const resizeStartWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
     phaseTimings: true,
     queue: true,
@@ -351,7 +522,34 @@ export default function App() {
   const [timer, setTimer] = useState(0);
   const [logs, setLogs] = useState<{ id: string, time: string, event: string, color?: string }[]>([]);
   const [zoom, setZoom] = useState(() => defaultZoom());
-  
+  const [timeScale, setTimeScale] = useState<TimeScale>(1);
+  const timeScaleRef = useRef<TimeScale>(1);
+  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [loopLastMs, setLoopLastMs] = useState(0);
+  const [loopAvg10Ms, setLoopAvg10Ms] = useState(0);
+  const [crashInfo, setCrashInfo] = useState<CrashInfo | null>(null);
+  const [isCrashModalMinimized, setIsCrashModalMinimized] = useState(false);
+  const [installDeferred, setInstallDeferred] = useState<BeforeInstallPromptEventExtended | null>(null);
+  const [isStandaloneDisplay, setIsStandaloneDisplay] = useState(false);
+
+  useEffect(() => {
+    setIsStandaloneDisplay(
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true,
+    );
+    const onBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setInstallDeferred(e as BeforeInstallPromptEventExtended);
+    };
+    const onAppInstalled = () => setInstallDeferred(null);
+    window.addEventListener('beforeinstallprompt', onBeforeInstall);
+    window.addEventListener('appinstalled', onAppInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+      window.removeEventListener('appinstalled', onAppInstalled);
+    };
+  }, []);
+
   // Store accumulated demand per phase over the current cycle
   const cycleDemandRef = useRef<number[]>([]);
   const cycleCounterRef = useRef(0);
@@ -390,10 +588,87 @@ phase(4):
     WEST_RIGHT.GO
 `);
   const [compiledPhases, setCompiledPhases] = useState<Phase[]>([]);
+  const [compiledRules, setCompiledRules] = useState<ConditionalRule[]>([]);
+  const [injectedPhase, setInjectedPhase] = useState<PhaseCommand[] | null>(null);
   const [programError, setProgramError] = useState<string>('');
   const [isEditMode, setIsEditMode] = useState(false);
   const [userTemplate, setUserTemplate] = useState(() => localStorage.getItem('traffic_user_template') || '');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const [cmdDir, setCmdDir] = useState<string>('');
+  const [cmdTurn, setCmdTurn] = useState<string>('');
+
+  const appendCommand = useCallback((action: string) => {
+    let cmd = '';
+    if (cmdDir === 'CROSSWALK') {
+       if (!cmdTurn) return;
+       cmd = `CROSSWALK_${cmdTurn}.${action}`;
+    } else {
+       if (!cmdDir || !cmdTurn) return;
+       cmd = `${cmdDir}_${cmdTurn}.${action}`;
+    }
+    setProgramCode(prev => {
+        const trimmed = prev.replace(/\s+$/, '');
+        return trimmed + (trimmed ? '\n' : '') + cmd + '\n';
+    });
+    setCmdTurn('');
+  }, [cmdDir, cmdTurn]);
+
+  const appendPhase = useCallback(() => {
+    setProgramCode(prev => {
+        const trimmed = prev.replace(/\s+$/, '');
+        const nextPhase = (prev.match(/phase\(/g) || []).length + 1;
+        return trimmed + (trimmed ? '\n\n' : '') + `phase(${nextPhase}):\n`;
+    });
+  }, []);
+
+  const deleteLastLine = useCallback(() => {
+    setProgramCode(prev => {
+        const lines = prev.split('\n');
+        while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+            lines.pop();
+        }
+        if (lines.length > 0) {
+            lines.pop();
+        }
+        return lines.join('\n') + '\n';
+    });
+  }, []);
+
+  const monaco = useMonaco();
+  useEffect(() => {
+    if (monaco) {
+       const provider = monaco.languages.registerCompletionItemProvider('python', {
+          provideCompletionItems: () => {
+              const suggestions = [
+                  ...Object.keys(KEYWORD_MAP).map(k => ({
+                      label: `${k}.GO`,
+                      kind: monaco.languages.CompletionItemKind.Keyword,
+                      insertText: `${k}.GO`
+                  })),
+                  ...Object.keys(KEYWORD_MAP).map(k => ({
+                      label: `${k}.YIELD`,
+                      kind: monaco.languages.CompletionItemKind.Keyword,
+                      insertText: `${k}.YIELD`
+                  })),
+                  {
+                      label: 'phase()',
+                      kind: monaco.languages.CompletionItemKind.Snippet,
+                      insertText: 'phase(${1:1}):\n\t$0',
+                      insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                  },
+                  {
+                      label: 'phase(min, max)',
+                      kind: monaco.languages.CompletionItemKind.Snippet,
+                      insertText: 'phase(${1:1}, min=${2:10}, max=${3:20}):\n\t$0',
+                      insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                  }
+              ];
+              return { suggestions } as any;
+          }
+       });
+       return () => provider.dispose();
+    }
+  }, [monaco]);
 
   const applyTemplate = (code: string) => {
     if (!code) return;
@@ -402,8 +677,6 @@ phase(4):
     // Trigger compilation immediately for better UX in view mode
     compile(code);
     // Reset scroll positions to ensure text appears "cleared" and fresh
-    if (textareaRef.current) textareaRef.current.scrollTop = 0;
-    if (highlightRef.current) highlightRef.current.scrollTop = 0;
     addLog("TEMPLATE_APPLIED", "var(--major)");
   };
 
@@ -421,6 +694,7 @@ phase(4):
     } else if (result.phases && result.phases.length > 0) {
       setProgramError('');
       setCompiledPhases(result.phases);
+      setCompiledRules(result.rules || []);
       const n = result.phases.length;
       setPhaseTimings((prev) =>
         clampPhaseTimingsToLoopCap(
@@ -429,6 +703,7 @@ phase(4):
         ),
       );
       setCurrentPhase(0);
+      setInjectedPhase(null);
       setLightState('GREEN');
       setTimer(0);
     }
@@ -445,11 +720,18 @@ phase(4):
   const forceRareSpawnRef = useRef(false);
   const forceLegendarySpawnRef = useRef(false);
   const laneCarsCacheRef = useRef<Record<string, Vehicle[]>>({});
+  const skidMarksRef = useRef<SkidMarkSegment[]>([]);
+  const previousRearTiresRef = useRef<Record<string, RearTires>>({});
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const requestRef = useRef<number>(null);
   const lastTimeRef = useRef<number>(null);
-  const highlightRef = useRef<HTMLDivElement>(null);
+  const crashDetectedRef = useRef(false);
+  const loopUpdateSectionsRef = useRef<Record<string, number>>({});
+  const loopDrawSectionsRef = useRef<Record<string, number>>({});
+  const loopTotalMsWindowRef = useRef<number[]>([]);
+  const loopHudThrottleRef = useRef(0);
   const [bgFontsReady, setBgFontsReady] = useState(false);
+  const heatMapRef = useRef<Float32Array>(new Float32Array(HEAT_GRID_COLS * HEAT_GRID_ROWS));
 
   useEffect(() => {
     let cancelled = false;
@@ -467,9 +749,120 @@ phase(4):
     LANES.forEach(l => laneCarsCacheRef.current[l.id] = []);
   }, []);
 
+  useEffect(() => {
+    timeScaleRef.current = timeScale;
+  }, [timeScale]);
+
   const addLog = useCallback((event: string, color?: string) => {
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     setLogs(prev => [{ id: Math.random().toString(), time, event, color }, ...prev].slice(0, 20));
+  }, []);
+
+  const resetSimulation = useCallback((reason: 'MANUAL' | 'CRASH') => {
+    vehiclesRef.current = [];
+    heatMapRef.current.fill(0);
+    skidMarksRef.current = [];
+    previousRearTiresRef.current = {};
+    crashDetectedRef.current = false;
+    setCrashInfo(null);
+    setIsCrashModalMinimized(false);
+    setOffScreenQueues({});
+    setInjectedPhase(null);
+    setCurrentPhase(0);
+    setLightState('GREEN');
+    setTimer(0);
+    inspectPaintRef.current = null;
+    setInspectPanel(null);
+    isPlayingRef.current = true;
+    setIsPlaying(true);
+    addLog(reason === 'CRASH' ? 'CRASH RESET' : 'MANUAL RESET', reason === 'CRASH' ? 'var(--red)' : 'var(--minor)');
+  }, [addLog]);
+
+  const detectCrash = useCallback((vehicles: Vehicle[]): CrashInfo | null => {
+    const center = CANVAS_SIZE / 2;
+    const intersectionHalf = INTERSECTION_SIZE / 2 + 32;
+    const inIntersection = (v: Vehicle) =>
+      Math.abs(v.x - center) <= intersectionHalf && Math.abs(v.y - center) <= intersectionHalf;
+    const mergePairKey = (laneA: string, laneB: string) =>
+      laneA < laneB ? `${laneA}|${laneB}` : `${laneB}|${laneA}`;
+    const normalizeAngle = (angle: number) => {
+      let a = angle;
+      while (a <= -Math.PI) a += Math.PI * 2;
+      while (a > Math.PI) a -= Math.PI * 2;
+      return a;
+    };
+    const laneApproachHeading = (lane: Lane | undefined) => {
+      if (!lane) return null;
+      if (lane.direction === 'N') return -Math.PI / 2;
+      if (lane.direction === 'S') return Math.PI / 2;
+      if (lane.direction === 'E') return 0;
+      return Math.PI;
+    };
+    const isFollowingPair = (a: Vehicle, b: Vehicle) => {
+      const la = LANE_MAP.get(a.laneId);
+      const lb = LANE_MAP.get(b.laneId);
+      const speedA = Math.hypot(a.vx, a.vy);
+      const speedB = Math.hypot(b.vx, b.vy);
+      const headingA = speedA > 0.35 ? Math.atan2(a.vy, a.vx) : laneApproachHeading(la) ?? Math.atan2(a.vy, a.vx);
+      const headingB = speedB > 0.35 ? Math.atan2(b.vy, b.vx) : laneApproachHeading(lb) ?? Math.atan2(b.vy, b.vx);
+      const headingDelta = Math.abs(normalizeAngle(headingA - headingB));
+      if (headingDelta > 0.55) return false;
+
+      const avgHeadingX = Math.cos((headingA + headingB) * 0.5);
+      const avgHeadingY = Math.sin((headingA + headingB) * 0.5);
+      const relX = b.x - a.x;
+      const relY = b.y - a.y;
+      const longitudinalGap = relX * avgHeadingX + relY * avgHeadingY;
+      const lateralGap = Math.abs(relX * -avgHeadingY + relY * avgHeadingX);
+      const laneWidthTolerance = Math.max(a.width, b.width) * 1.15;
+      const convoyLen = Math.max(a.length, b.length) * 1.25;
+
+      if (
+        la &&
+        lb &&
+        la.direction === lb.direction &&
+        la.type === 'THRU' &&
+        lb.type === 'THRU' &&
+        headingDelta < 0.35 &&
+        lateralGap <= laneWidthTolerance &&
+        Math.abs(longitudinalGap) <= convoyLen
+      ) {
+        return true;
+      }
+
+      return Math.abs(longitudinalGap) <= convoyLen && lateralGap <= laneWidthTolerance;
+    };
+
+    for (let i = 0; i < vehicles.length; i++) {
+      const a = vehicles[i];
+      if (!inIntersection(a)) continue;
+      const speedA = Math.hypot(a.vx, a.vy);
+      for (let j = i + 1; j < vehicles.length; j++) {
+        const b = vehicles[j];
+        if (!inIntersection(b)) continue;
+        const speedB = Math.hypot(b.vx, b.vy);
+        if (speedA + speedB < 1.2) continue;
+        const la = LANE_MAP.get(a.laneId);
+        const lb = LANE_MAP.get(b.laneId);
+        if (la && lb && la.movement === lb.movement) continue;
+        if (a.laneId === b.laneId || isFollowingPair(a, b)) continue;
+        if (ADJACENT_RIGHT_MERGE_PAIR_KEYS.has(mergePairKey(a.laneId, b.laneId))) continue;
+        if (ADJACENT_LEFT_MERGE_PAIR_KEYS.has(mergePairKey(a.laneId, b.laneId))) continue;
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const collisionDist = (Math.max(a.width, a.length) + Math.max(b.width, b.length)) * 0.3;
+        if ((dx * dx + dy * dy) <= collisionDist * collisionDist) {
+          return {
+            x: (a.x + b.x) * 0.5,
+            y: (a.y + b.y) * 0.5,
+            laneA: a.laneId,
+            laneB: b.laneId,
+            vehicleIds: [a.id, b.id],
+          };
+        }
+      }
+    }
+    return null;
   }, []);
 
   // Initial boot log
@@ -526,9 +919,17 @@ phase(4):
     }
   }, []);
 
+  const yieldMovements = useMemo(() => 
+    injectedPhase
+      ? injectedPhase.filter(c => c.action === 'YIELD').map(c => c.target)
+      : compiledPhases.length > 0 ? (compiledPhases[currentPhase]?.commands.filter(c => c.action === 'YIELD').map(c => c.target) || []) : [],
+  [compiledPhases, currentPhase, injectedPhase]);
+
   const activeMovements = useMemo(() => 
-    compiledPhases.length > 0 ? (compiledPhases[currentPhase]?.movements || []) : getActiveMovements(currentPhase),
-  [compiledPhases, currentPhase, getActiveMovements]);
+    injectedPhase
+      ? injectedPhase.filter(c => c.action === 'GO').map(c => c.target)
+      : compiledPhases.length > 0 ? (compiledPhases[currentPhase]?.commands.filter(c => c.action === 'GO').map(c => c.target) || []) : getActiveMovements(currentPhase),
+  [compiledPhases, currentPhase, getActiveMovements, injectedPhase]);
 
   // Accumulate traffic data when phases are active
   useEffect(() => {
@@ -543,7 +944,7 @@ phase(4):
     const laneCounts = new Map<string, number>();
     vehiclesRef.current.forEach(v => laneCounts.set(v.laneId, (laneCounts.get(v.laneId) || 0) + 1));
 
-    const movementsInPhase = compiledPhases.length > 0 ? compiledPhases[currentPhase].movements : getActiveMovements(currentPhase);
+    const movementsInPhase = compiledPhases.length > 0 ? compiledPhases[currentPhase].commands.map(c => c.target) : getActiveMovements(currentPhase);
     const movementSet = new Set(movementsInPhase);
 
     let phaseLoad = 0;
@@ -591,7 +992,17 @@ phase(4):
         // Refine/Smooth the changes by 40% so it doesnt snap instantly
         return newTimings.map((target, i) => {
           const diff = target - next[i];
-          return next[i] + Math.round(diff * 0.4);
+          let smoothed = next[i] + Math.round(diff * 0.4);
+          
+          if (compiledPhases[i]) {
+            if (compiledPhases[i].minDuration !== undefined) {
+              smoothed = Math.max(smoothed, compiledPhases[i].minDuration);
+            }
+            if (compiledPhases[i].maxDuration !== undefined) {
+              smoothed = Math.min(smoothed, compiledPhases[i].maxDuration);
+            }
+          }
+          return smoothed;
         });
       });
     }
@@ -622,18 +1033,18 @@ phase(4):
             });
             return [...prev, entry].slice(-20);
         });
-    }, 2000);
+    }, 2000 / timeScale);
     return () => clearInterval(interval);
-  }, [isPlaying, phaseTimings, offScreenQueues]);
+  }, [isPlaying, phaseTimings, offScreenQueues, timeScale]);
 
   // 1. Timer update interval
   useEffect(() => {
     if (!isPlaying) return;
     const interval = setInterval(() => {
-      setTimer(prev => prev + 0.1);
+      setTimer(prev => prev + 0.1 * timeScale);
     }, 100);
     return () => clearInterval(interval);
-  }, [isPlaying]);
+  }, [isPlaying, timeScale]);
 
   // 2. Traffic light state transition logic
   useEffect(() => {
@@ -641,7 +1052,7 @@ phase(4):
 
     const sc = compiledPhases.length > 0 ? compiledPhases.length : 4;
     const idx = currentPhase % sc;
-    const currentMaxGreen = phaseTimings[idx] ?? DEFAULT_PHASE_GREEN_SECONDS;
+    const currentMaxGreen = injectedPhase ? MIN_PHASE_GREEN_SECONDS : (phaseTimings[idx] ?? DEFAULT_PHASE_GREEN_SECONDS);
 
     if (lightState === 'GREEN' && timer >= currentMaxGreen) {
       setLightState('YELLOW');
@@ -652,21 +1063,39 @@ phase(4):
       addLog('ALL RED WAIT', 'var(--red)');
       setTimer(0);
     } else if (lightState === 'RED' && timer >= DEFAULT_TIMINGS.allRed) {
-      let nextPhaseIndex = 0;
-      let nextMovements: Movement[] = [];
-      if (compiledPhases.length > 0) {
-          nextPhaseIndex = (currentPhase + 1) % compiledPhases.length;
-          nextMovements = compiledPhases[nextPhaseIndex]?.movements || [];
-      } else {
-          nextPhaseIndex = (currentPhase + 1) % 4;
-          nextMovements = getActiveMovements(nextPhaseIndex);
+      let matchedRule: ConditionalRule | null = null;
+      if (!injectedPhase) {
+        for (const rule of compiledRules) {
+           if ((offScreenQueues[rule.targetLaneId] || 0) > rule.threshold) {
+               matchedRule = rule;
+               break;
+           }
+        }
       }
-      setLightState('GREEN');
-      setCurrentPhase(nextPhaseIndex);
-      addLog(`${formatActiveMovements(nextMovements)} START`, 'var(--major)');
-      setTimer(0);
+
+      if (matchedRule) {
+          setInjectedPhase(matchedRule.insertCommands);
+          setLightState('GREEN');
+          addLog('SENSOR OVERRIDE ACTIVE', 'var(--major)');
+          setTimer(0);
+      } else {
+          let nextPhaseIndex = 0;
+          let nextMovements: Movement[] = [];
+          if (compiledPhases.length > 0) {
+              nextPhaseIndex = (currentPhase + (injectedPhase ? 0 : 1)) % compiledPhases.length;
+              nextMovements = compiledPhases[nextPhaseIndex]?.commands.map(c => c.target) || [];
+          } else {
+              nextPhaseIndex = (currentPhase + (injectedPhase ? 0 : 1)) % 4;
+              nextMovements = getActiveMovements(nextPhaseIndex);
+          }
+          setInjectedPhase(null);
+          setLightState('GREEN');
+          setCurrentPhase(nextPhaseIndex);
+          addLog(`${formatActiveMovements(nextMovements)} START`, 'var(--major)');
+          setTimer(0);
+      }
     }
-  }, [timer, isPlaying, lightState, currentPhase, phaseTimings, activeMovements, compiledPhases, addLog, getActiveMovements]);
+  }, [timer, isPlaying, lightState, currentPhase, phaseTimings, activeMovements, compiledPhases, compiledRules, injectedPhase, offScreenQueues, addLog, getActiveMovements]);
 
   // 1. TRAFFIC GENERATOR (PRODUCER)
   // This only calculates demand and adds it to the off-screen queue.
@@ -687,9 +1116,9 @@ phase(4):
         });
         return changed ? next : prev;
       });
-    }, 500);
+    }, 500 / timeScale);
     return () => clearInterval(interval);
-  }, [isPlaying, trafficRates]);
+  }, [isPlaying, trafficRates, timeScale]);
 
   // 2. QUEUE DRAINER / SPAWNER (CONSUMER)
   // This is the ONLY place where cars are spawned onto the canvas.
@@ -791,29 +1220,42 @@ phase(4):
         });
         return changed ? next : prev;
       });
-    }, 150); // High frequency check ensures cars spawn as soon as there is a gap
+    }, 150 / timeScale);
     return () => clearInterval(interval);
-  }, [isPlaying]);
+  }, [isPlaying, timeScale]);
 
-  const update = useCallback((time: number) => {
+  const update = useCallback((time: number, simStep: number) => {
+    const u = loopUpdateSectionsRef.current;
+    for (const k of Object.keys(u)) delete u[k];
+    let m = performance.now();
+
     const vehicles = vehiclesRef.current;
+    const nextRearTires: Record<string, RearTires> = {};
+    const heatMap = heatMapRef.current;
+    for (let i = 0; i < heatMap.length; i++) {
+      heatMap[i] *= Math.pow(HEATMAP_DECAY, simStep);
+    }
+    u.heatDecay = performance.now() - m;
+    m = performance.now();
     
-    // Pre-bucket vehicles by lane for O(1) collision candidate lookups (no allocations)
     const laneCars = laneCarsCacheRef.current;
     for (const k in laneCars) laneCars[k].length = 0;
     for (let i = 0; i < vehicles.length; i++) {
       const v = vehicles[i];
       if (laneCars[v.laneId]) laneCars[v.laneId].push(v);
     }
+    u.bucketLanes = performance.now() - m;
+    m = performance.now();
 
     vehicles.forEach((v) => {
       const lane = LANE_MAP.get(v.laneId)!;
-      const isGreen = activeMovements.includes(lane.movement) && lightState === 'GREEN';
-      const isYellow = activeMovements.includes(lane.movement) && lightState === 'YELLOW';
+      const isYield = yieldMovements.includes(lane.movement);
+      const isGreen = (activeMovements.includes(lane.movement) || isYield) && lightState === 'GREEN';
+      const isYellow = (activeMovements.includes(lane.movement) || isYield) && lightState === 'YELLOW';
       
       // Target Speed
       let targetSpeed = v.cruiseSpeed;
-      if (time - v.spawnAtMs < v.startDelay * 1000) {
+      if ((time - v.spawnAtMs) * timeScaleRef.current < v.startDelay * 1000) {
         targetSpeed = 0;
       }
       
@@ -825,12 +1267,55 @@ phase(4):
       if (lane.direction === 'W') distToStop = v.x - (CANVAS_SIZE / 2 + STOP_LINE);
 
       // Light logic
-      if (!isGreen) {
+      let mustStopForLight = false;
+      if (!isGreen) { // Normal Red/Yellow stop check
         if (distToStop > 0 && distToStop < 100) {
           if (!isYellow || distToStop > 40) {
-            targetSpeed = 0;
+            mustStopForLight = true;
           }
         }
+      }
+
+      // Yield Check (Applies to both Green and moving on Yellow)
+      if (!mustStopForLight && isYield && distToStop > -20 && distToStop < 40) {
+        let conflictingLaneIds: string[] = [];
+        if (lane.type === 'LEFT') {
+          if (lane.direction === 'N') conflictingLaneIds = ['sb-thru', 'sb-right'];
+          if (lane.direction === 'S') conflictingLaneIds = ['nb-thru', 'nb-right'];
+          if (lane.direction === 'E') conflictingLaneIds = ['wb-thru', 'wb-right'];
+          if (lane.direction === 'W') conflictingLaneIds = ['eb-thru', 'eb-right'];
+        } else if (lane.type === 'RIGHT') {
+          if (lane.direction === 'N') conflictingLaneIds = ['wb-thru', 'wb-right', 'sb-left'];
+          if (lane.direction === 'S') conflictingLaneIds = ['eb-thru', 'eb-right', 'nb-left'];
+          if (lane.direction === 'E') conflictingLaneIds = ['nb-thru', 'nb-right', 'wb-left'];
+          if (lane.direction === 'W') conflictingLaneIds = ['sb-thru', 'sb-right', 'eb-left'];
+        }
+
+        for (const conflictingLaneId of conflictingLaneIds) {
+          const oncoming = laneCars[conflictingLaneId] || [];
+          for (const other of oncoming) {
+            let otherDistToStop = Infinity;
+            if (conflictingLaneId.startsWith('sb-')) otherDistToStop = (CANVAS_SIZE / 2 - STOP_LINE) - other.y;
+            if (conflictingLaneId.startsWith('nb-')) otherDistToStop = other.y - (CANVAS_SIZE / 2 + STOP_LINE);
+            if (conflictingLaneId.startsWith('wb-')) otherDistToStop = other.x - (CANVAS_SIZE / 2 + STOP_LINE);
+            if (conflictingLaneId.startsWith('eb-')) otherDistToStop = (CANVAS_SIZE / 2 - STOP_LINE) - other.x;
+
+            if (otherDistToStop > -80 && otherDistToStop < 220) {
+              const otherSpeed = Math.abs(other.vx) + Math.abs(other.vy);
+              const isMoving = otherSpeed > 0.5;
+              const isStuckInIntersection = !isMoving && (otherDistToStop > -80 && otherDistToStop <= 0);
+              if (isMoving || isStuckInIntersection) {
+                mustStopForLight = true;
+                break;
+              }
+            }
+          }
+          if (mustStopForLight) break;
+        }
+      }
+
+      if (mustStopForLight) {
+        targetSpeed = 0;
       }
 
       // Car following logic
@@ -855,8 +1340,11 @@ phase(4):
             }
           } else {
             if (distSq < (safeDist * 0.7) * (safeDist * 0.7)) {
-              carAhead = other;
-              break;
+              // Tie-breaker to prevent symmetric deadlocks when turns cross paths
+              if (v.id < other.id) {
+                carAhead = other;
+                break;
+              }
             }
           }
           continue;
@@ -889,12 +1377,20 @@ phase(4):
       if (currentSpeed < targetSpeed) accel = v.accel;
       else if (currentSpeed > targetSpeed) accel = -v.decel;
 
-      const newSpeed = Math.max(0, currentSpeed + accel);
+      const newSpeed = Math.max(0, currentSpeed + accel * simStep);
       
       if (newSpeed < currentSpeed - 0.001) {
           v.brakeIntensity = Math.min(1, (currentSpeed - newSpeed) / v.decel);
       } else {
           v.brakeIntensity = 0;
+      }
+      const isStopped = newSpeed < 0.1;
+      const heatLoad = (isStopped ? 1 : 0) + (v.brakeIntensity || 0);
+      if (heatLoad > 0) {
+        const gridX = Math.max(0, Math.min(HEAT_GRID_COLS - 1, Math.floor((v.x / CANVAS_SIZE) * HEAT_GRID_COLS)));
+        const gridY = Math.max(0, Math.min(HEAT_GRID_ROWS - 1, Math.floor((v.y / CANVAS_SIZE) * HEAT_GRID_ROWS)));
+        const heatIndex = gridY * HEAT_GRID_COLS + gridX;
+        heatMap[heatIndex] = Math.min(HEATMAP_MAX, heatMap[heatIndex] + heatLoad * HEATMAP_GAIN);
       }
       
       if (newSpeed > 0.1) {
@@ -938,7 +1434,7 @@ phase(4):
 
       if (v.isTurning) {
           const angularSpeed = newSpeed / v.turnRadius!;
-          v.turnProgress = Math.min(1, v.turnProgress! + (angularSpeed / (Math.PI / 2)));
+          v.turnProgress = Math.min(1, v.turnProgress! + (angularSpeed / (Math.PI / 2)) * simStep);
           
           const currentAngle = v.turnAngleStart! + (v.turnAngleEnd! - v.turnAngleStart!) * v.turnProgress;
           v.x = v.turnCenterX! + v.turnRadius! * Math.cos(currentAngle);
@@ -972,12 +1468,25 @@ phase(4):
           if (lane.direction === 'E') { v.vx = newSpeed; v.vy = 0; }
           if (lane.direction === 'W') { v.vx = -newSpeed; v.vy = 0; }
 
-          v.x += v.vx;
-          v.y += v.vy;
+          v.x += v.vx * simStep;
+          v.y += v.vy * simStep;
       }
-    });
 
-    // In-place filter to heavily reduce garbage collection thrashing
+      const currentRearTires = getRearTirePositions(v);
+      const previousRearTires = previousRearTiresRef.current[v.id];
+      if (previousRearTires && (v.brakeIntensity || 0) > SKID_MARK_BRAKE_THRESHOLD) {
+        const segmentWidth = Math.max(0.9, v.width * 0.12);
+        const baseAlpha = 0.18 + ((v.brakeIntensity || 0) - SKID_MARK_BRAKE_THRESHOLD) * 0.34;
+        skidMarksRef.current.push(
+          { from: previousRearTires.left, to: currentRearTires.left, bornAt: time, ttlMs: SKID_MARK_TTL_MS, baseAlpha, width: segmentWidth },
+          { from: previousRearTires.right, to: currentRearTires.right, bornAt: time, ttlMs: SKID_MARK_TTL_MS, baseAlpha, width: segmentWidth },
+        );
+      }
+      nextRearTires[v.id] = currentRearTires;
+    });
+    u.vehicleSim = performance.now() - m;
+    m = performance.now();
+
     let validCount = 0;
     for (let i = 0; i < vehicles.length; i++) {
       const v = vehicles[i];
@@ -986,10 +1495,41 @@ phase(4):
       }
     }
     vehicles.length = validCount;
-  }, [activeMovements, lightState]);
+    const filteredRearTires: Record<string, RearTires> = {};
+    for (let i = 0; i < vehicles.length; i++) {
+      const vehicleId = vehicles[i].id;
+      const tires = nextRearTires[vehicleId];
+      if (tires) filteredRearTires[vehicleId] = tires;
+    }
+    previousRearTiresRef.current = filteredRearTires;
+    skidMarksRef.current = skidMarksRef.current.filter(
+      (segment) => (time - segment.bornAt) * timeScaleRef.current < segment.ttlMs,
+    );
+    if (skidMarksRef.current.length > MAX_SKID_MARK_SEGMENTS) {
+      skidMarksRef.current.splice(0, skidMarksRef.current.length - MAX_SKID_MARK_SEGMENTS);
+    }
+    if (!crashDetectedRef.current) {
+      const collision = detectCrash(vehicles);
+      if (collision) {
+        crashDetectedRef.current = true;
+        setCrashInfo(collision);
+        setIsCrashModalMinimized(false);
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+        addLog('CRASH DETECTED', 'var(--red)');
+      }
+    }
+    u.cullSkid = performance.now() - m;
+  }, [activeMovements, lightState, addLog, detectCrash]);
 
   const draw = useCallback((ctx: CanvasRenderingContext2D, time: number) => {
+    const d = loopDrawSectionsRef.current;
+    for (const k of Object.keys(d)) delete d[k];
+    let md = performance.now();
+
     ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+    d.clear = performance.now() - md;
+    md = performance.now();
 
     const centerX = CANVAS_SIZE / 2;
     const centerY = CANVAS_SIZE / 2;
@@ -1095,10 +1635,14 @@ phase(4):
       }
       bgCanvasRef.current = bg;
     }
+    d.bgLazyInit = performance.now() - md;
+    md = performance.now();
 
     if (bgCanvasRef.current) {
       ctx.drawImage(bgCanvasRef.current, 0, 0);
     }
+    d.bgBlit = performance.now() - md;
+    md = performance.now();
 
     const drawIntersectionPaths = () => {
       ctx.save();
@@ -1124,6 +1668,48 @@ phase(4):
     };
 
     drawIntersectionPaths();
+    d.paths = performance.now() - md;
+    md = performance.now();
+
+    if (showHeatmap) {
+      const cellWidth = CANVAS_SIZE / HEAT_GRID_COLS;
+      const cellHeight = CANVAS_SIZE / HEAT_GRID_ROWS;
+      const heatMap = heatMapRef.current;
+      for (let y = 0; y < HEAT_GRID_ROWS; y++) {
+        for (let x = 0; x < HEAT_GRID_COLS; x++) {
+          const heat = heatMap[y * HEAT_GRID_COLS + x];
+          if (heat <= 0.08) continue;
+          const t = Math.max(0, Math.min(1, heat / HEATMAP_MAX));
+          const red = Math.round(255 * t);
+          const green = Math.round(255 * (1 - t));
+          const alpha = 0.08 + t * 0.37;
+          ctx.fillStyle = `rgba(${red}, ${green}, 0, ${alpha})`;
+          ctx.fillRect(x * cellWidth, y * cellHeight, cellWidth, cellHeight);
+        }
+      }
+    }
+    d.heatmap = performance.now() - md;
+    md = performance.now();
+
+    if (skidMarksRef.current.length > 0) {
+      ctx.save();
+      ctx.lineCap = 'round';
+      for (let i = 0; i < skidMarksRef.current.length; i++) {
+        const segment = skidMarksRef.current[i];
+        const ageRatio = ((time - segment.bornAt) * timeScaleRef.current) / segment.ttlMs;
+        const alpha = segment.baseAlpha * (1 - Math.min(1, ageRatio));
+        if (alpha <= 0) continue;
+        ctx.strokeStyle = `rgba(0, 0, 0, ${alpha.toFixed(3)})`;
+        ctx.lineWidth = segment.width;
+        ctx.beginPath();
+        ctx.moveTo(segment.from.x, segment.from.y);
+        ctx.lineTo(segment.to.x, segment.to.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    d.skidMarks = performance.now() - md;
+    md = performance.now();
 
     const drawSignal = (x: number, y: number, angle: number, movements: Movement[], isLeft: boolean = false) => {
       ctx.save();
@@ -1131,7 +1717,11 @@ phase(4):
       ctx.rotate(angle);
 
       const isActive = movements.some(m => activeMovements.includes(m));
-      const currentHeadState = isActive ? lightState : 'RED';
+      const isYield = movements.some(m => yieldMovements.includes(m));
+      let currentHeadState = 'RED';
+      if (isActive) currentHeadState = lightState;
+      else if (isYield && lightState === 'GREEN') currentHeadState = 'FLASHING_YELLOW';
+      else if (isYield && lightState === 'YELLOW') currentHeadState = 'YELLOW';
 
       // Housing
       ctx.fillStyle = '#1A1D23';
@@ -1147,7 +1737,10 @@ phase(4):
       const isHorizontal = Math.abs(angle % Math.PI) > 0.1 && Math.abs(angle % Math.PI) < Math.PI - 0.1;
 
       const drawLight = (state: string, color: string, offColor: string, posY: number) => {
-        const isOn = currentHeadState === state;
+        let isOn = currentHeadState === state;
+        if (state === 'YELLOW' && currentHeadState === 'FLASHING_YELLOW') {
+            isOn = Math.floor(time / Math.max(100, 500 / timeScaleRef.current)) % 2 === 0;
+        }
         ctx.fillStyle = isOn ? color : offColor;
         ctx.beginPath();
         ctx.arc(0, posY, 5, 0, Math.PI * 2);
@@ -1196,8 +1789,9 @@ phase(4):
     drawDynamicQueue('sb', centerX - INTERSECTION_SIZE / 2 - 140, 40);
     drawDynamicQueue('eb', 40, centerY + INTERSECTION_SIZE / 2 + 20);
     drawDynamicQueue('wb', CANVAS_SIZE - 160, centerY - INTERSECTION_SIZE / 2 - 40);
+    d.queueLabels = performance.now() - md;
+    md = performance.now();
 
-    // 2. Draw Vehicles (Middle Layer)
     vehiclesRef.current.forEach(v => {
       ctx.save();
       ctx.translate(v.x, v.y);
@@ -1223,11 +1817,78 @@ phase(4):
         isBraking,
         brakeIntensity,
       });
+      const isCrashedVehicle = !!crashInfo && crashInfo.vehicleIds.includes(v.id);
+      const shouldFlashCrash = Math.floor(time / 180) % 2 === 0;
+      if (isCrashedVehicle && shouldFlashCrash) {
+        ctx.strokeStyle = 'rgba(248, 81, 73, 0.95)';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = 'rgba(248, 81, 73, 0.85)';
+        ctx.shadowBlur = 14;
+        ctx.strokeRect(
+          -v.length / 2 - 3,
+          -v.width / 2 - 3,
+          v.length + 6,
+          v.width + 6,
+        );
+      }
 
       ctx.restore();
     });
+    d.vehicles = performance.now() - md;
+    md = performance.now();
 
-    // 3. Signal Lights (Top Layer)
+    const inspected = inspectPaintRef.current;
+    if (inspected) {
+      const insLane = LANE_MAP.get(inspected.laneId);
+      if (insLane) {
+        const geom = getPathGeometry(insLane, centerX, centerY);
+        const end = getPathEndPoint(geom);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(88, 166, 255, 0.95)';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 8]);
+        ctx.beginPath();
+        if (geom.type === 'STRAIGHT') {
+          ctx.moveTo(geom.startX, geom.startY);
+          ctx.lineTo(geom.endX, geom.endY);
+        } else {
+          ctx.arc(geom.centerX, geom.centerY, geom.radius, geom.startAngle, geom.endAngle, geom.counterClockwise);
+        }
+        ctx.stroke();
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(inspected.x, inspected.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // 3. Crosswalks (Below Signals)
+    const drawCrosswalk = (m: Movement, x: number, y: number, isVertical: boolean) => {
+        const isActive = activeMovements.includes(m) && lightState === 'GREEN';
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.fillStyle = isActive ? 'rgba(63, 185, 80, 0.4)' : 'rgba(255, 255, 255, 0.05)';
+        if (isVertical) {
+            for (let i = -80; i <= 80; i += 20) {
+                ctx.fillRect(i, -10, 10, 20);
+            }
+        } else {
+            for (let i = -80; i <= 80; i += 20) {
+                ctx.fillRect(-10, i, 20, 10);
+            }
+        }
+        ctx.restore();
+    };
+
+    drawCrosswalk(Movement.CROSSWALK_NORTH, centerX, centerY - INTERSECTION_SIZE / 2 - 15, true);
+    drawCrosswalk(Movement.CROSSWALK_SOUTH, centerX, centerY + INTERSECTION_SIZE / 2 + 15, true);
+    drawCrosswalk(Movement.CROSSWALK_EAST, centerX + INTERSECTION_SIZE / 2 + 15, centerY, false);
+    drawCrosswalk(Movement.CROSSWALK_WEST, centerX - INTERSECTION_SIZE / 2 - 15, centerY, false);
+
+    // 4. Signal Lights (Top Layer)
     drawSignal(centerX + 100, centerY + 130, 0, [Movement.NORTHBOUND_RIGHT]);
     drawSignal(centerX + 60, centerY + 130, 0, [Movement.NORTHBOUND_STRAIGHT]);
     drawSignal(centerX + 20, centerY + 130, 0, [Movement.NORTHBOUND_LEFT], true);
@@ -1243,19 +1904,62 @@ phase(4):
     drawSignal(centerX + 130, centerY - 100, Math.PI/2, [Movement.WESTBOUND_RIGHT]);
     drawSignal(centerX + 130, centerY - 60, Math.PI/2, [Movement.WESTBOUND_STRAIGHT]);
     drawSignal(centerX + 130, centerY - 20, Math.PI/2, [Movement.WESTBOUND_LEFT], true);
+    d.chrome = performance.now() - md;
 
-  }, [activeMovements, lightState, offScreenQueues, bgFontsReady]);
+  }, [activeMovements, lightState, offScreenQueues, bgFontsReady, showHeatmap, yieldMovements, crashInfo]);
 
   const loop = useCallback((time: number) => {
-    if (lastTimeRef.current !== null && isPlaying) {
-      update(time);
+    const tLoop = performance.now();
+    let updateMs = 0;
+    if (lastTimeRef.current !== null && isPlayingRef.current) {
+      const wallDtSec = Math.min(0.05, (time - lastTimeRef.current) / 1000);
+      const simStep = wallDtSec * 60 * timeScaleRef.current;
+      const u0 = performance.now();
+      let remaining = simStep;
+      while (remaining > 1e-8) {
+        const sub = Math.min(MAX_SIM_INTEGRATION_STEP, remaining);
+        update(time, sub);
+        remaining -= sub;
+      }
+      updateMs = performance.now() - u0;
     }
+    let drawMs = 0;
     const ctx = canvasRef.current?.getContext('2d');
-    if (ctx) draw(ctx, time);
-    
+    if (ctx) {
+      const d0 = performance.now();
+      draw(ctx, time);
+      drawMs = performance.now() - d0;
+    }
+    const totalMs = performance.now() - tLoop;
+
+    const win = loopTotalMsWindowRef.current;
+    win.push(totalMs);
+    if (win.length > 10) win.shift();
+    const avg10 = win.reduce((a, b) => a + b, 0) / win.length;
+
+    const hudNow = performance.now();
+    if (hudNow - loopHudThrottleRef.current >= LOOP_HUD_MIN_INTERVAL_MS) {
+      loopHudThrottleRef.current = hudNow;
+      setLoopLastMs(totalMs);
+      setLoopAvg10Ms(avg10);
+    }
+
+    if (totalMs >= LOOP_LAG_LOG_MS) {
+      const round = (x: number) => Number(x.toFixed(2));
+      const pack = (o: Record<string, number>) =>
+        Object.fromEntries(Object.entries(o).map(([k, v]) => [k, round(v)]));
+      console.warn('[gameLoop]', {
+        totalMs: round(totalMs),
+        updateMs: round(updateMs),
+        drawMs: round(drawMs),
+        updateSections: pack(loopUpdateSectionsRef.current),
+        drawSections: pack(loopDrawSectionsRef.current),
+      });
+    }
+
     lastTimeRef.current = time;
     requestRef.current = requestAnimationFrame(loop);
-  }, [isPlaying, update, draw]);
+  }, [update, draw]);
 
   useEffect(() => {
     requestRef.current = requestAnimationFrame(loop);
@@ -1289,11 +1993,77 @@ phase(4):
     setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
+  const togglePlayback = useCallback(() => {
+    setIsPlaying((playing) => {
+      const next = !playing;
+      isPlayingRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const handleCanvasPointerDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    const mainEl = simMainRef.current;
+    if (!canvas || !mainEl) return;
+    const cr = canvas.getBoundingClientRect();
+    const px = ((e.clientX - cr.left) / cr.width) * CANVAS_SIZE;
+    const py = ((e.clientY - cr.top) / cr.height) * CANVAS_SIZE;
+    const picked = pickVehicleAtCanvasPoint(px, py, vehiclesRef.current);
+    const mr = mainEl.getBoundingClientRect();
+    const panelW = 268;
+    const panelPad = 8;
+    if (picked) {
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      const snap: Vehicle = { ...picked };
+      inspectPaintRef.current = snap;
+      const left = Math.max(panelPad, Math.min(e.clientX - mr.left + 12, mr.width - panelW - panelPad));
+      const top = Math.max(panelPad, Math.min(e.clientY - mr.top + 12, mr.height - panelPad));
+      setInspectPanel({ vehicle: snap, left, top });
+      return;
+    }
+    inspectPaintRef.current = null;
+    setInspectPanel(null);
+  }, []);
+
+  const startSidebarResize = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    resizeStartXRef.current = e.clientX;
+    resizeStartWidthRef.current = sidebarWidth;
+    setIsResizingSidebar(true);
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (!isResizingSidebar) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - resizeStartXRef.current;
+      const nextWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, resizeStartWidthRef.current + delta));
+      setSidebarWidth(nextWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingSidebar(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingSidebar]);
+
   const phaseRowCount = compiledPhases.length > 0 ? compiledPhases.length : 4;
   const cycleLength = Array.from({ length: phaseRowCount }, (_, i) => phaseTimings[i] ?? DEFAULT_PHASE_GREEN_SECONDS).reduce((a, b) => a + b, 0);
+  const sidebarColumnWidth = sidebarCollapsed ? 0 : sidebarWidth;
 
   return (
-    <div className={`h-screen w-full grid ${sidebarCollapsed ? 'grid-cols-[0px_minmax(0,1fr)]' : 'grid-cols-[280px_minmax(0,1fr)]'} grid-rows-[48px_minmax(0,1fr)] transition-[grid-template-columns] duration-300 ease-in-out overflow-hidden bg-[#0D0F12]`}>
+    <div
+      className={`h-screen w-full grid grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-[#0D0F12] ${isResizingSidebar ? '' : 'transition-[grid-template-columns] duration-300 ease-in-out'}`}
+      style={{ gridTemplateColumns: `${sidebarColumnWidth}px minmax(0,1fr)` }}
+    >
       {/* Header Area */}
       <header className="col-span-full bg-[#1A1D23] border-b border-[#2D333B] flex items-center justify-between px-4 z-10">
         <div className="flex items-center gap-3 font-mono font-bold tracking-wider text-xs">
@@ -1308,13 +2078,32 @@ phase(4):
           <span>TRAFFIC_SEC_082_V4.2</span>
           <span className="bg-[#3FB950]/10 text-[#3FB950] px-2 py-0.5 rounded border border-[#3FB950] text-[11px]">OPERATIONAL</span>
         </div>
-        <div className="font-mono text-xs text-[#C9D1D9] flex items-center gap-6">
+        <div className="font-mono text-xs text-[#C9D1D9] flex flex-wrap items-center justify-end gap-x-4 gap-y-1 sm:gap-x-6">
+          {installDeferred && !isStandaloneDisplay && (
+            <button
+              type="button"
+              onClick={async () => {
+                const ev = installDeferred;
+                if (!ev) return;
+                await ev.prompt();
+                await ev.userChoice;
+                setInstallDeferred(null);
+              }}
+              className="flex shrink-0 items-center gap-2 rounded border border-[#D29922]/60 bg-[#D29922]/10 px-2.5 py-1 text-[11px] font-bold tracking-wider text-[#D29922] transition-colors hover:bg-[#D29922]/20"
+            >
+              <Download size={14} className="shrink-0" />
+              INSTALL TERMINAL
+            </button>
+          )}
           <div>CYCLE: {cycleLength}s / {MAX_TOTAL_LOOP_SECONDS}s</div>
+          <div className="text-[#8B949E]">
+            LOOP: {loopLastMs.toFixed(2)}ms · AVG10: {loopAvg10Ms.toFixed(2)}ms
+          </div>
         </div>
       </header>
 
       {/* Left Sidebar: Controls & Monitors */}
-      <aside className={`col-start-1 row-start-2 bg-[#1A1D23] border-r border-[#2D333B] p-4 flex flex-col gap-6 overflow-y-auto scrollbar-hide min-h-0 transition-all duration-300 ease-in-out ${sidebarCollapsed ? 'opacity-0 pointer-events-none translate-x-[-100%]' : 'opacity-100 translate-x-0'}`}>
+      <aside className={`relative col-start-1 row-start-2 bg-[#1A1D23] border-r border-[#2D333B] p-4 flex flex-col gap-6 overflow-y-auto scrollbar-hide min-h-0 transition-all duration-300 ease-in-out ${sidebarCollapsed ? 'opacity-0 pointer-events-none translate-x-[-100%]' : 'opacity-100 translate-x-0'}`}>
         <CollapsibleSection id="monitor" title="MONITOR" isCollapsed={collapsed.monitor} onToggle={toggleCollapsed}>
           <div className="bg-black/20 border border-[#2D333B] p-3 rounded flex flex-col overflow-hidden">
              <div className="flex justify-between items-center mb-2">
@@ -1338,7 +2127,8 @@ phase(4):
 
              <div className="flex flex-col gap-1 overflow-y-auto scrollbar-hide flex-1 max-h-32 mb-2">
                {DIRECTIONS.map(dir => {
-                 const movements = activeMovements.filter(m => getDirection(m) === dir);
+                 const allMovements = [...activeMovements, ...yieldMovements];
+                 const movements = allMovements.filter(m => getDirection(m) === dir);
                  if (movements.length === 0) return null;
                  const sortedMovements = [...movements].sort((a, b) => {
                    const valA = a % 3 === 0 ? 3 : a % 3;
@@ -1352,15 +2142,20 @@ phase(4):
                        {dir.replace('BOUND', '')}
                      </div>
                      <div className="flex gap-1">
-                       {sortedMovements.map(m => (
+                       {sortedMovements.map(m => {
+                         const isYield = yieldMovements.includes(m);
+                         const activeClass = isYield
+                            ? 'bg-[#D29922]/10 border-[#D29922]/30 text-[#D29922]'
+                            : 'bg-[#3FB950]/10 border-[#3FB950]/30 text-[#3FB950]';
+                         return (
                          <span 
                            key={m} 
                            title={MovementLabels[m]}
-                           className="flex items-center justify-center w-6 h-6 rounded border border-[#3FB950]/30 bg-[#3FB950]/10 text-[#3FB950]"
+                           className={`flex items-center justify-center w-6 h-6 rounded border ${activeClass}`}
                          >
                            {getMovementIcon(m, 12)}
                          </span>
-                       ))}
+                       )})}
                      </div>
                    </div>
                  );
@@ -1410,7 +2205,7 @@ phase(4):
                 </button>
                 <div className="w-[1px] h-4 bg-[#2D333B] mx-0.5" />
                 {PHASE_TEMPLATES.map((t, i) => {
-                  const shortNames = ['STD', 'ART', 'SWP', 'CNT'];
+                  const shortNames = ['STD', 'ART', 'SWP', 'ADV'];
                   const isActive = programCode === t.code;
                   return (
                     <button 
@@ -1427,7 +2222,7 @@ phase(4):
             </div>
             <div className="flex items-center justify-between">
               <div className="text-[11px] text-[#C9D1D9]/70 font-mono leading-tight">
-                {isEditMode ? '# Syntax: phase(N): then KEYWORD.GO lines (e.g. NORTH_STRAIGHT.GO).' : 'VIEW_MODE (READ_ONLY)'}
+                {isEditMode ? '# phase(N, min=5, max=10): then .GO/.YIELD cmds (or if/phase_insert)' : 'VIEW_MODE (READ_ONLY)'}
               </div>
               <button 
                 onClick={() => setIsEditMode(!isEditMode)}
@@ -1438,35 +2233,67 @@ phase(4):
             </div>
 
             {isEditMode ? (
-              <div className="relative w-full h-64 bg-black/40 border border-[#2D333B] rounded focus-within:border-[#3FB950] transition-colors overflow-hidden">
-                <div 
-                    ref={highlightRef}
-                    className="absolute inset-0 p-2 font-mono text-[12px] pointer-events-none whitespace-pre overflow-hidden border border-transparent" 
-                    aria-hidden="true"
-                >
-                    {programCode.split('\n').map((line, i) => {
-                        const activePhase = compiledPhases.length > 0 ? compiledPhases[currentPhase] : null;
-                        const isHighlighted = activePhase && i >= activePhase.lineStart && i <= activePhase.lineEnd;
-                        return (
-                            <div key={i} className={`min-h-[1.5em] ${isHighlighted ? "bg-[#3FB950]/20 rounded-sm -mx-1 px-1" : ""}`}>
-                                <span className="opacity-0">{line || ' '}</span>
-                            </div>
-                        );
-                    })}
+              <div className="flex flex-col gap-2">
+                <div className="relative w-full h-64 bg-black/40 border border-[#2D333B] rounded focus-within:border-[#3FB950] transition-colors overflow-hidden">
+                  <Editor
+                    height="100%"
+                    defaultLanguage="python"
+                    theme="vs-dark"
+                    value={programCode}
+                    onChange={(val) => setProgramCode(val || '')}
+                    options={{
+                      minimap: { enabled: false },
+                      lineNumbers: "off",
+                      fontSize: 12,
+                      fontFamily: "'JetBrains Mono', monospace",
+                      scrollBeyondLastLine: false,
+                      wordWrap: "on",
+                      padding: { top: 8, bottom: 8 }
+                    }}
+                  />
                 </div>
-                <textarea
-                  ref={textareaRef}
-                  value={programCode}
-                  onChange={(e) => setProgramCode(e.target.value)}
-                  onScroll={(e) => {
-                      if (highlightRef.current) {
-                          highlightRef.current.scrollTop = e.currentTarget.scrollTop;
-                          highlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
-                      }
-                  }}
-                  spellCheck={false}
-                  className="absolute inset-0 w-full h-full p-2 font-mono text-[12px] text-[#3FB950] bg-transparent resize-none focus:outline-none border border-transparent outline-none leading-[1.5em]"
-                />
+                <div className="bg-[#1A1D23] border border-[#2D333B] p-2 rounded flex flex-col gap-2">
+                  <div className="flex gap-1 justify-between items-center">
+                    <div className="text-[10px] font-bold text-[#C9D1D9]">COMMAND BUILDER</div>
+                    <div className="flex gap-1">
+                      <button onClick={appendPhase} className="px-2 py-1 text-[10px] font-mono rounded bg-black/20 border border-[#2D333B] text-[#C9D1D9] hover:bg-white/5 transition-colors">
+                        + PHASE
+                      </button>
+                      <button onClick={deleteLastLine} className="p-1 text-[#F85149] hover:bg-[#F85149]/20 rounded border border-transparent hover:border-[#F85149]/30 transition-colors" title="Delete Last Command">
+                        <Trash2 size={14}/>
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="flex flex-wrap gap-1">
+                    {['NORTH', 'SOUTH', 'EAST', 'WEST', 'CROSSWALK'].map(d => (
+                        <button key={d} onClick={() => setCmdDir(d)} className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${cmdDir === d ? 'bg-[#58A6FF]/20 border-[#58A6FF] text-[#58A6FF]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}>{d}</button>
+                    ))}
+                  </div>
+                  
+                  {cmdDir && cmdDir !== 'CROSSWALK' && (
+                      <div className="flex flex-wrap gap-1">
+                        {['LEFT', 'STRAIGHT', 'RIGHT'].map(t => (
+                            <button key={t} onClick={() => setCmdTurn(t)} className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${cmdTurn === t ? 'bg-[#D29922]/20 border-[#D29922] text-[#D29922]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}>{t}</button>
+                        ))}
+                      </div>
+                  )}
+
+                  {cmdDir === 'CROSSWALK' && (
+                      <div className="flex flex-wrap gap-1">
+                        {['NORTH', 'SOUTH', 'EAST', 'WEST'].map(t => (
+                            <button key={t} onClick={() => setCmdTurn(t)} className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${cmdTurn === t ? 'bg-[#D29922]/20 border-[#D29922] text-[#D29922]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}>{t}</button>
+                        ))}
+                      </div>
+                  )}
+
+                  {cmdDir && cmdTurn && (
+                      <div className="flex gap-2 mt-1">
+                        <button onClick={() => appendCommand('GO')} className="flex-1 py-1.5 bg-[#3FB950]/20 text-[#3FB950] border border-[#3FB950]/40 rounded text-[11px] font-bold hover:bg-[#3FB950]/30 transition-colors">ADD .GO</button>
+                        <button onClick={() => appendCommand('YIELD')} className="flex-1 py-1.5 bg-[#D29922]/20 text-[#D29922] border border-[#D29922]/40 rounded text-[11px] font-bold hover:bg-[#D29922]/30 transition-colors">ADD .YIELD</button>
+                      </div>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="w-full max-h-64 overflow-y-auto scrollbar-hide">
@@ -1505,6 +2332,15 @@ phase(4):
                 className={`px-2 py-0.5 rounded text-[11px] font-mono transition-colors ${isAdaptive ? 'bg-[#3FB950]/10 text-[#3FB950] border border-[#3FB950]' : 'bg-gray-800 text-[#C9D1D9] border border-gray-700'}`}
               >
                 {isAdaptive ? 'ADAPTIVE_ON' : 'MANUAL_OVERRIDE'}
+              </button>
+            </div>
+            <div className="flex items-center justify-between text-xs text-[#C9D1D9]/70 mb-1">
+              <span>VISUAL_OVERLAY</span>
+              <button
+                onClick={() => setShowHeatmap(prev => !prev)}
+                className={`px-2 py-0.5 rounded text-[11px] font-mono transition-colors ${showHeatmap ? 'bg-[#F85149]/10 text-[#F85149] border border-[#F85149]' : 'bg-gray-800 text-[#C9D1D9] border border-gray-700'}`}
+              >
+                {showHeatmap ? 'HEATMAP_ON' : 'HEATMAP_OFF'}
               </button>
             </div>
             <div className="flex flex-col gap-2 max-h-[min(52vh,28rem)] overflow-y-auto pr-1 scrollbar-hide">
@@ -1568,19 +2404,13 @@ phase(4):
 
         <div className="mt-auto space-y-4 pt-4 border-t border-[#2D333B]">
           <button 
-            onClick={() => setIsPlaying(!isPlaying)}
+            onClick={togglePlayback}
             className={`w-full py-2 rounded text-[13px] font-bold transition-all border ${isPlaying ? 'bg-[#D29922]/10 border-[#D29922] text-[#D29922]' : 'bg-[#3FB950]/10 border-[#3FB950] text-[#3FB950]'}`}
           >
             {isPlaying ? 'PAUSE SYSTEM' : 'RESUME SYSTEM'}
           </button>
           <button 
-            onClick={() => {
-                vehiclesRef.current = [];
-                setCurrentPhase(0);
-                setLightState('GREEN');
-                setTimer(0);
-                addLog('MANUAL RESET', 'var(--minor)');
-            }}
+            onClick={() => resetSimulation('MANUAL')}
             className="w-full py-2 rounded text-[13px] font-bold border border-[#2D333B] text-[#C9D1D9] hover:bg-white/5"
           >
             RESET BUFFER
@@ -1589,42 +2419,166 @@ phase(4):
       </aside>
 
       {/* Center Area: Simulator Visual */}
-      <main className="col-start-2 row-start-2 relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]">
-        <div className="absolute top-6 right-6 flex flex-col gap-2 z-20">
-          <button 
-            onClick={() => setZoom(z => Math.min(3, z + ZOOM_STEP))}
-            className="p-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
-            title="Zoom In"
+      <main ref={simMainRef} className="col-start-2 row-start-2 relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]">
+        {!sidebarCollapsed && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            onMouseDown={startSidebarResize}
+            className="absolute left-0 top-0 z-30 h-full w-3 -translate-x-1/2 cursor-col-resize group"
           >
-            <Plus size={18} />
-          </button>
-          <button 
-            onClick={() => setZoom(z => Math.max(0.5, z - ZOOM_STEP))}
-            className="p-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
-            title="Zoom Out"
-          >
-            <Minus size={18} />
-          </button>
-          <button 
-            onClick={() => setZoom(defaultZoom())}
-            className="py-1 px-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[10px] font-mono text-[#8B949E] hover:text-white transition-all shadow-xl"
-          >
-            RESET
-          </button>
+            <div className="mx-auto h-full w-[2px] bg-[#3FB950]/35 transition-colors group-hover:bg-[#3FB950]/80 group-active:bg-[#3FB950]" />
+          </div>
+        )}
+        <div className="absolute top-6 right-6 z-20 flex flex-row items-start gap-2">
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={togglePlayback}
+              className={`flex min-h-[2.5rem] min-w-[3rem] items-center justify-center rounded border p-2 shadow-xl transition-all ${
+                isPlaying
+                  ? 'border-[#D29922]/60 bg-[#D29922]/15 text-[#D29922] hover:border-[#D29922]'
+                  : 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950] hover:border-[#3FB950]'
+              }`}
+              title={isPlaying ? 'Pause simulation' : 'Resume simulation'}
+            >
+              {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+            </button>
+            {TIME_SCALE_OPTIONS.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setTimeScale(s)}
+                className={`min-w-[3rem] py-1.5 px-2 rounded text-[11px] font-mono font-bold border transition-all shadow-xl ${
+                  timeScale === s
+                    ? 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950]'
+                    : 'border-[#2D333B] bg-[#1A1D23] text-[#8B949E] hover:border-[#3FB950]/50 hover:text-[#C9D1D9]'
+                }`}
+                title={`Simulation ${s}x`}
+              >
+                {s}x
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-col gap-2">
+            <button
+              onClick={() => setZoom((z) => Math.min(3, z + ZOOM_STEP))}
+              className="p-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
+              title="Zoom In"
+            >
+              <Plus size={18} />
+            </button>
+            <button
+              onClick={() => setZoom((z) => Math.max(0.5, z - ZOOM_STEP))}
+              className="p-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
+              title="Zoom Out"
+            >
+              <Minus size={18} />
+            </button>
+            <button
+              onClick={() => setZoom(defaultZoom())}
+              className="py-1 px-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[10px] font-mono text-[#8B949E] hover:text-white transition-all shadow-xl"
+            >
+              RESET
+            </button>
+          </div>
         </div>
         <div className="flex items-center justify-center w-full h-full overflow-auto">
           <canvas 
             ref={canvasRef} 
             width={CANVAS_SIZE} 
             height={CANVAS_SIZE}
+            onPointerDown={handleCanvasPointerDown}
             style={{ 
               transform: `scale(${zoom})`,
               transition: 'transform 0.15s ease-out'
             }}
-            className="box-border max-h-[min(70vh,100%)] max-w-[min(70vh,100%)] aspect-square w-full rounded border border-[#2D333B] shadow-2xl"
+            className="box-border max-h-[min(70vh,100%)] max-w-[min(70vh,100%)] aspect-square w-full cursor-crosshair rounded border border-[#2D333B] shadow-2xl"
           />
         </div>
+        {inspectPanel && (
+          <div
+            className="pointer-events-none absolute z-[25] w-[min(268px,calc(100%-16px))]"
+            style={{ left: inspectPanel.left, top: inspectPanel.top }}
+          >
+            <VehicleInspectTooltip vehicle={inspectPanel.vehicle} />
+          </div>
+        )}
+        <AnimatePresence>
+          {crashInfo && !isCrashModalMinimized && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-40 flex items-center justify-center bg-black/70"
+            >
+              <motion.div
+                initial={{ scale: 0.94, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.94, opacity: 0 }}
+                className="w-[min(92vw,420px)] rounded border border-[#F85149]/60 bg-[#1A1D23] p-6 shadow-2xl"
+              >
+                <div className="text-center">
+                  <div className="text-[11px] font-mono tracking-[0.2em] text-[#F85149]/80">INCIDENT</div>
+                  <h2 className="mt-2 text-2xl font-mono font-bold text-[#F85149]">CRASH DETECTED</h2>
+                  <p className="mt-3 text-sm font-mono text-[#C9D1D9]">
+                    Conflicting movements entered the intersection.
+                  </p>
+                  <div className="mt-4 rounded border border-[#2D333B] bg-black/20 px-3 py-2 text-left font-mono text-xs text-[#C9D1D9]">
+                    <div className="text-[#8B949E]">CRASHED LANES</div>
+                    <div className="mt-1 text-[#F85149]">
+                      {crashInfo.laneA.toUpperCase()} × {crashInfo.laneB.toUpperCase()}
+                    </div>
+                  </div>
+                  <div className="mt-5 flex gap-2">
+                    <button
+                      onClick={() => setIsCrashModalMinimized(true)}
+                      className="flex-1 rounded border border-[#2D333B] bg-black/20 py-2 text-[13px] font-mono font-bold text-[#C9D1D9] hover:bg-white/5"
+                    >
+                      MINIMIZE
+                    </button>
+                    <button
+                      onClick={() => resetSimulation('CRASH')}
+                      className="flex-1 rounded border border-[#F85149] bg-[#F85149]/15 py-2 text-[13px] font-mono font-bold text-[#F85149] hover:bg-[#F85149]/25"
+                    >
+                      RESET SIMULATION
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+          {crashInfo && isCrashModalMinimized && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 8 }}
+              className="absolute bottom-6 right-6 z-40 w-[min(92vw,360px)] rounded border border-[#F85149]/60 bg-[#1A1D23]/95 p-3 shadow-2xl backdrop-blur"
+            >
+              <div className="text-[11px] font-mono tracking-[0.16em] text-[#F85149]/80">CRASH DETECTED</div>
+              <div className="mt-1 font-mono text-xs text-[#C9D1D9]">
+                {crashInfo.laneA.toUpperCase()} × {crashInfo.laneB.toUpperCase()}
+              </div>
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => setIsCrashModalMinimized(false)}
+                  className="flex-1 rounded border border-[#2D333B] bg-black/20 py-1.5 text-[11px] font-mono font-bold text-[#C9D1D9] hover:bg-white/5"
+                >
+                  RESTORE
+                </button>
+                <button
+                  onClick={() => resetSimulation('CRASH')}
+                  className="flex-1 rounded border border-[#F85149] bg-[#F85149]/15 py-1.5 text-[11px] font-mono font-bold text-[#F85149] hover:bg-[#F85149]/25"
+                >
+                  RESET
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
+      <FirmwareUpdatePrompt />
     </div>
   );
 }

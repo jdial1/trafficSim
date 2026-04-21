@@ -12,6 +12,10 @@ export enum Movement {
   EASTBOUND_LEFT = 10,
   EASTBOUND_STRAIGHT = 11,
   EASTBOUND_RIGHT = 12,
+  CROSSWALK_NORTH = 13,
+  CROSSWALK_SOUTH = 14,
+  CROSSWALK_EAST = 15,
+  CROSSWALK_WEST = 16,
 }
 
 export type LightState = 'GREEN' | 'YELLOW' | 'RED';
