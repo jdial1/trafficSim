@@ -165,7 +165,7 @@ export const MIN_PHASE_GREEN_SECONDS = 5;
 
 export const MAX_TOTAL_LOOP_SECONDS = 60;
 
-export const DEFAULT_BUILTIN_PHASE_TIMINGS: number[] = [10, 20, 10, 20];
+export const DEFAULT_BUILTIN_PHASE_TIMINGS: number[] = [20, 20];
 
 export function clampPhaseTimingsToLoopCap(values: number[], phaseCount: number): number[] {
   let sum = values.reduce((a, b) => a + b, 0);

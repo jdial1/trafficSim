@@ -15,6 +15,7 @@ import vehicleCatalog from './vehicles.json';
 import { renderVehicleSprite } from './renderVehicleDesign';
 import { FirmwareUpdatePrompt } from './components/FirmwareUpdatePrompt';
 import { GameIntro } from './components/GameIntro';
+import { MobileOmniCorpEditor } from './components/MobileOmniCorpEditor';
 import { level1Briefing } from './briefing/level1';
 
 type BeforeInstallPromptEventExtended = Event & {
@@ -25,6 +26,7 @@ type BeforeInstallPromptEventExtended = Event & {
 const STOP_LINE = INTERSECTION_SIZE / 2 + 10;
 const BASE_SAFE_GAP = 25;
 const LANE_MAP = new Map<string, Lane>(LANES.map(l => [l.id, l]));
+const LEFT_LANE_IDS = LANES.filter((l) => l.type === 'LEFT').map((l) => l.id);
 const VEHICLE_COLORS = vehicleCatalog.colors;
 
 const VIEWPORT_MOBILE_MAX_WIDTH = 767;
@@ -635,37 +637,23 @@ export default function App() {
   const cycleCounterRef = useRef(0);
   
   // Interpreter State
-  const [programCode, setProgramCode] = useState<string>(`phase(1):
+  const [programCode, setProgramCode] = useState<string>(`phase(1): # North/South Priority
     NORTH_STRAIGHT.GO
-    NORTH_LEFT.GO
-    NORTH_RIGHT.GO
-    EAST_RIGHT.GO
-    SOUTH_RIGHT.GO
-    WEST_RIGHT.GO
-
-phase(2):
-    EAST_STRAIGHT.GO
-    EAST_LEFT.GO
-    NORTH_RIGHT.GO
-    EAST_RIGHT.GO
-    SOUTH_RIGHT.GO
-    WEST_RIGHT.GO
-
-phase(3):
     SOUTH_STRAIGHT.GO
-    SOUTH_LEFT.GO
     NORTH_RIGHT.GO
-    EAST_RIGHT.GO
     SOUTH_RIGHT.GO
-    WEST_RIGHT.GO
+    # Lefts yield to oncoming thru traffic
+    NORTH_LEFT.YIELD
+    SOUTH_LEFT.YIELD
 
-phase(4):
+phase(2): # East/West Priority
+    EAST_STRAIGHT.GO
     WEST_STRAIGHT.GO
-    WEST_LEFT.GO
-    NORTH_RIGHT.GO
     EAST_RIGHT.GO
-    SOUTH_RIGHT.GO
     WEST_RIGHT.GO
+    # Lefts yield to oncoming thru traffic
+    EAST_LEFT.YIELD
+    WEST_LEFT.YIELD
 `);
   const [compiledPhases, setCompiledPhases] = useState<Phase[]>([]);
   const [compiledRules, setCompiledRules] = useState<ConditionalRule[]>([]);
@@ -779,7 +767,14 @@ phase(4):
     const result = parseTrafficProgram(code);
     if (result.error) {
       setProgramError(result.error);
-    } else if (result.phases && result.phases.length > 0) {
+      setCompiledPhases([]);
+      setCompiledRules([]);
+      setInjectedPhase(null);
+      setLightState('RED');
+      setTimer(0);
+      return;
+    }
+    if (result.phases && result.phases.length > 0) {
       setProgramError('');
       setCompiledPhases(result.phases);
       setCompiledRules(result.rules || []);
@@ -794,7 +789,14 @@ phase(4):
       setInjectedPhase(null);
       setLightState('GREEN');
       setTimer(0);
+      return;
     }
+    setProgramError('');
+    setCompiledPhases([]);
+    setCompiledRules([]);
+    setInjectedPhase(null);
+    setLightState('RED');
+    setTimer(0);
   }, [programCode]);
 
   useEffect(() => {
@@ -1004,41 +1006,32 @@ phase(4):
     return () => window.removeEventListener('keydown', onKey);
   }, [addLog]);
 
-  // Helper to get active movements for current phase
-  const getActiveMovements = useCallback((phase: number) => {
-    const allRights = [Movement.NORTHBOUND_RIGHT, Movement.EASTBOUND_RIGHT, Movement.SOUTHBOUND_RIGHT, Movement.WESTBOUND_RIGHT];
-    switch (phase) {
-      case 0:
-        return [Movement.NORTHBOUND_LEFT, Movement.NORTHBOUND_STRAIGHT, ...allRights];
-      case 1:
-        return [Movement.EASTBOUND_LEFT, Movement.EASTBOUND_STRAIGHT, ...allRights];
-      case 2:
-        return [Movement.SOUTHBOUND_LEFT, Movement.SOUTHBOUND_STRAIGHT, ...allRights];
-      case 3:
-        return [Movement.WESTBOUND_LEFT, Movement.WESTBOUND_STRAIGHT, ...allRights];
-      default:
-        return [];
-    }
-  }, []);
+  const yieldMovements = useMemo(
+    () =>
+      injectedPhase
+        ? injectedPhase.filter((c) => c.action === 'YIELD').map((c) => c.target)
+        : compiledPhases.length > 0
+          ? compiledPhases[currentPhase]?.commands.filter((c) => c.action === 'YIELD').map((c) => c.target) || []
+          : [],
+    [compiledPhases, currentPhase, injectedPhase],
+  );
 
-  const yieldMovements = useMemo(() => 
-    injectedPhase
-      ? injectedPhase.filter(c => c.action === 'YIELD').map(c => c.target)
-      : compiledPhases.length > 0 ? (compiledPhases[currentPhase]?.commands.filter(c => c.action === 'YIELD').map(c => c.target) || []) : [],
-  [compiledPhases, currentPhase, injectedPhase]);
-
-  const activeMovements = useMemo(() => 
-    injectedPhase
-      ? injectedPhase.filter(c => c.action === 'GO').map(c => c.target)
-      : compiledPhases.length > 0 ? (compiledPhases[currentPhase]?.commands.filter(c => c.action === 'GO').map(c => c.target) || []) : getActiveMovements(currentPhase),
-  [compiledPhases, currentPhase, getActiveMovements, injectedPhase]);
+  const activeMovements = useMemo(
+    () =>
+      injectedPhase
+        ? injectedPhase.filter((c) => c.action === 'GO').map((c) => c.target)
+        : compiledPhases.length > 0
+          ? compiledPhases[currentPhase]?.commands.filter((c) => c.action === 'GO').map((c) => c.target) || []
+          : [],
+    [compiledPhases, currentPhase, injectedPhase],
+  );
 
   // Accumulate traffic data when phases are active
   useEffect(() => {
     if (!isPlaying || !isAdaptive) return;
+    if (compiledPhases.length === 0) return;
 
-    // Get demand on the currently active phase and add it to our cycle accumulator
-    const n = compiledPhases.length > 0 ? compiledPhases.length : 4;
+    const n = compiledPhases.length;
     if (!cycleDemandRef.current || cycleDemandRef.current.length !== n) {
       cycleDemandRef.current = new Array(n).fill(0);
     }
@@ -1046,7 +1039,7 @@ phase(4):
     const laneCounts = new Map<string, number>();
     vehiclesRef.current.forEach(v => laneCounts.set(v.laneId, (laneCounts.get(v.laneId) || 0) + 1));
 
-    const movementsInPhase = compiledPhases.length > 0 ? compiledPhases[currentPhase].commands.map(c => c.target) : getActiveMovements(currentPhase);
+    const movementsInPhase = compiledPhases[currentPhase].commands.map((c) => c.target);
     const movementSet = new Set(movementsInPhase);
 
     let phaseLoad = 0;
@@ -1109,7 +1102,7 @@ phase(4):
       });
     }
 
-  }, [currentPhase, lightState, isAdaptive, isPlaying, offScreenQueues, compiledPhases, getActiveMovements]);
+  }, [currentPhase, lightState, isAdaptive, isPlaying, offScreenQueues, compiledPhases]);
 
   // Record History for Charts
   useEffect(() => {
@@ -1151,8 +1144,15 @@ phase(4):
   // 2. Traffic light state transition logic
   useEffect(() => {
     if (!isPlaying) return;
+    if (compiledPhases.length === 0) {
+      if (lightState !== 'RED') {
+        setLightState('RED');
+        setTimer(0);
+      }
+      return;
+    }
 
-    const sc = compiledPhases.length > 0 ? compiledPhases.length : 4;
+    const sc = compiledPhases.length;
     const idx = currentPhase % sc;
     const currentMaxGreen = injectedPhase ? MIN_PHASE_GREEN_SECONDS : (phaseTimings[idx] ?? DEFAULT_PHASE_GREEN_SECONDS);
 
@@ -1181,15 +1181,8 @@ phase(4):
           addLog('SENSOR OVERRIDE ACTIVE', 'var(--major)');
           setTimer(0);
       } else {
-          let nextPhaseIndex = 0;
-          let nextMovements: Movement[] = [];
-          if (compiledPhases.length > 0) {
-              nextPhaseIndex = (currentPhase + (injectedPhase ? 0 : 1)) % compiledPhases.length;
-              nextMovements = compiledPhases[nextPhaseIndex]?.commands.map(c => c.target) || [];
-          } else {
-              nextPhaseIndex = (currentPhase + (injectedPhase ? 0 : 1)) % 4;
-              nextMovements = getActiveMovements(nextPhaseIndex);
-          }
+          const nextPhaseIndex = (currentPhase + (injectedPhase ? 0 : 1)) % compiledPhases.length;
+          const nextMovements = compiledPhases[nextPhaseIndex]?.commands.map((c) => c.target) || [];
           setInjectedPhase(null);
           setLightState('GREEN');
           setCurrentPhase(nextPhaseIndex);
@@ -1197,7 +1190,7 @@ phase(4):
           setTimer(0);
       }
     }
-  }, [timer, isPlaying, lightState, currentPhase, phaseTimings, activeMovements, compiledPhases, compiledRules, injectedPhase, offScreenQueues, addLog, getActiveMovements]);
+  }, [timer, isPlaying, lightState, currentPhase, phaseTimings, activeMovements, compiledPhases, compiledRules, injectedPhase, offScreenQueues, addLog]);
 
   // 1. TRAFFIC GENERATOR (PRODUCER)
   // This only calculates demand and adds it to the off-screen queue.
@@ -1382,15 +1375,26 @@ phase(4):
       if (!mustStopForLight && isYield && distToStop > -20 && distToStop < 40) {
         let conflictingLaneIds: string[] = [];
         if (lane.type === 'LEFT') {
-          if (lane.direction === 'N') conflictingLaneIds = ['sb-thru', 'sb-right'];
-          if (lane.direction === 'S') conflictingLaneIds = ['nb-thru', 'nb-right'];
-          if (lane.direction === 'E') conflictingLaneIds = ['wb-thru', 'wb-right'];
-          if (lane.direction === 'W') conflictingLaneIds = ['eb-thru', 'eb-right'];
+          const oncoming =
+            lane.direction === 'N'
+              ? ['sb-thru', 'sb-right']
+              : lane.direction === 'S'
+                ? ['nb-thru', 'nb-right']
+                : lane.direction === 'E'
+                  ? ['wb-thru', 'wb-right']
+                  : ['eb-thru', 'eb-right'];
+          conflictingLaneIds = [...oncoming, ...LEFT_LANE_IDS.filter((id) => id !== lane.id)];
         } else if (lane.type === 'RIGHT') {
           if (lane.direction === 'N') conflictingLaneIds = ['wb-thru', 'wb-right', 'sb-left'];
           if (lane.direction === 'S') conflictingLaneIds = ['eb-thru', 'eb-right', 'nb-left'];
           if (lane.direction === 'E') conflictingLaneIds = ['nb-thru', 'nb-right', 'wb-left'];
           if (lane.direction === 'W') conflictingLaneIds = ['sb-thru', 'sb-right', 'eb-left'];
+        } else if (lane.type === 'THRU') {
+          if (lane.direction === 'N' || lane.direction === 'S') {
+            conflictingLaneIds = LANES.filter((l) => l.direction === 'E' || l.direction === 'W').map((l) => l.id);
+          } else {
+            conflictingLaneIds = LANES.filter((l) => l.direction === 'N' || l.direction === 'S').map((l) => l.id);
+          }
         }
 
         for (const conflictingLaneId of conflictingLaneIds) {
@@ -1405,8 +1409,18 @@ phase(4):
             if (otherDistToStop > -80 && otherDistToStop < 220) {
               const otherSpeed = Math.abs(other.vx) + Math.abs(other.vy);
               const isMoving = otherSpeed > 0.5;
-              const isStuckInIntersection = !isMoving && (otherDistToStop > -80 && otherDistToStop <= 0);
-              if (isMoving || isStuckInIntersection) {
+              const isStuckInIntersection = !isMoving && otherDistToStop > -80 && otherDistToStop <= 0;
+              const nearContest =
+                distToStop < 50 && otherDistToStop > -20 && otherDistToStop < 50;
+              if (
+                otherDistToStop <= 0 ||
+                isStuckInIntersection ||
+                (isMoving && otherDistToStop < 220) ||
+                (nearContest &&
+                  (otherDistToStop < distToStop - 2 ||
+                    (Math.abs(otherDistToStop - distToStop) <= 3 &&
+                      v.laneId.localeCompare(conflictingLaneId) > 0)))
+              ) {
                 mustStopForLight = true;
                 break;
               }
@@ -2273,14 +2287,12 @@ phase(4):
                 <div className="text-[10px] text-[#3FB950] font-mono uppercase tracking-wide leading-tight">{engineeringTemplateBlurb.title}</div>
                 <div className="text-[10px] text-[#8B949E] font-mono leading-snug">{engineeringTemplateBlurb.body}</div>
               </div>
-              <div className="flex-1 min-h-[40vh] relative border-2 border-[#2D333B] rounded-none focus-within:border-[#3FB950] transition-colors overflow-hidden">
-                <Editor
-                  height="100%"
-                  defaultLanguage="python"
-                  theme="vs-dark"
-                  value={programCode}
-                  onChange={(val) => setProgramCode(val || '')}
-                  options={{ minimap: { enabled: false }, lineNumbers: "off", fontSize: 13, fontFamily: "'JetBrains Mono', monospace", scrollBeyondLastLine: false, wordWrap: "on", padding: { top: 8, bottom: 8 } }}
+              <div className="flex min-h-0 flex-1 flex-col">
+                <MobileOmniCorpEditor
+                  programCode={programCode}
+                  setProgramCode={setProgramCode}
+                  appendPhase={appendPhase}
+                  deleteLastLine={deleteLastLine}
                 />
               </div>
               {programError && (
