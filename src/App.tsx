@@ -16,7 +16,7 @@ import { renderVehicleSprite } from './renderVehicleDesign';
 import { FirmwareUpdatePrompt } from './components/FirmwareUpdatePrompt';
 import { GameIntro } from './components/GameIntro';
 import { MobileOmniCorpEditor } from './components/MobileOmniCorpEditor';
-import { level1Briefing } from './briefing/level1';
+import { loadSession, saveSession } from './persist/mobileSessionDb';
 
 type BeforeInstallPromptEventExtended = Event & {
   prompt: () => Promise<void>;
@@ -35,6 +35,9 @@ const MOBILE_EXTRA_ZOOM_STEPS = 2;
 const SIDEBAR_DEFAULT_WIDTH = 280;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 520;
+const MOBILE_SPLIT_HANDLE_PX = 16;
+const MOBILE_COLLAPSED_STRIP_PX = 52;
+const MOBILE_SPLIT_MAX_RATIO = 0.85;
 const HEAT_GRID_COLS = 48;
 const HEAT_GRID_ROWS = 48;
 const HEATMAP_DECAY = 0.985;
@@ -377,10 +380,10 @@ const BadgeView = React.memo(({ phases, currentPhase }: { phases: Phase[], curre
                 return (
                     <div 
                         key={i} 
-                        className={`p-2 rounded border transition-all ${isActive ? 'bg-[#3FB950]/10 border-[#3FB950]/40 ring-1 ring-[#3FB950]/20' : 'bg-black/20 border-[#2D333B]'}`}
+                        className={`p-2 rounded border transition-all ${isActive ? 'border-[#30363D] border-t-[3px] border-t-[#3FB950] bg-[#0d1117] ring-1 ring-[#3FB950]/15' : 'border-[#30363D] bg-[#0d1117]'}`}
                     >
                         <div className="flex items-center justify-between mb-2">
-                            <span className={`text-xs font-mono font-bold tracking-wider ${isActive ? 'text-[#3FB950]' : 'text-[#C9D1D9]'}`}>
+                            <span className={`text-xs font-mono font-bold tracking-wider ${isActive ? 'text-[#f0f3f6]' : 'text-[#e6edf3]'}`}>
                                 {phase.label}
                             </span>
                             {isActive && (
@@ -403,16 +406,16 @@ const BadgeView = React.memo(({ phases, currentPhase }: { phases: Phase[], curre
 
                                 return (
                                     <div key={dir} className="flex items-center justify-between gap-2 border-b border-[#2D333B]/30 last:border-0 pb-1 last:pb-0">
-                                        <div className="text-[10px] text-[#C9D1D9] font-mono tracking-tighter uppercase opacity-90 shrink-0">
+                                        <div className="text-[10px] text-[#b7bdc8] font-mono tracking-tighter uppercase shrink-0">
                                             {dir.replace('BOUND', '')}
                                         </div>
                                         <div className="flex gap-1">
                                             {sortedCommands.map(cmd => {
                                                 const isYield = cmd.action === 'YIELD';
                                                 const activeClass = isYield 
-                                                    ? 'bg-[#D29922]/20 border-[#D29922]/30 text-[#D29922]' 
-                                                    : 'bg-[#3FB950]/20 border-[#3FB950]/30 text-[#3FB950]';
-                                                const inactiveClass = 'bg-[#1A1D23] border-[#2D333B] text-[#C9D1D9]';
+                                                    ? 'bg-[#2d1f0a] border-[#a3712f] text-[#f0d9a8]' 
+                                                    : 'bg-[#0d2818] border-[#238636] text-[#7ee787]';
+                                                const inactiveClass = 'bg-[#161b22] border-[#30363D] text-[#e6edf3]';
                                                 return (
                                                 <span 
                                                     key={cmd.target} 
@@ -477,23 +480,59 @@ const CollapsibleSection = React.memo(({
     </div>
 ));
 
-const BriefingTab = () => (
+const PhaseLogList = React.memo(({ logs, maxHeightClass }: { logs: LogEntry[]; maxHeightClass: string }) => (
+  <div className={`overflow-y-auto space-y-1 pr-2 scrollbar-hide ${maxHeightClass}`}>
+    <AnimatePresence initial={false}>
+      {logs.map((log) => (
+        <motion.div
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          key={log.id}
+          className="font-mono text-[11px] sm:text-xs flex justify-between gap-2 border-b border-white/5 py-1"
+        >
+          <span className="text-[#C9D1D9]/60 shrink-0">{log.time}</span>
+          <span
+            className="min-w-0 flex-1 whitespace-pre-line break-words text-right leading-tight"
+            style={{ color: log.color || 'var(--major)' }}
+          >
+            {log.event}
+          </span>
+        </motion.div>
+      ))}
+    </AnimatePresence>
+  </div>
+));
+
+import { BriefingContent, level1Briefing } from './briefing/level1';
+
+const BriefingTab = ({ level, activeSubLevel, onSelectLevel }: { level: BriefingContent; activeSubLevel: number; onSelectLevel: (idx: number) => void }) => (
   <div className="flex flex-col h-full bg-[#1A1D23] p-4 text-[#C9D1D9] font-mono overflow-y-auto scrollbar-hide">
-    <div className="border-2 border-[#2D333B] bg-black/40 rounded-none p-4 mb-4 shadow-xl relative">
+    <div className="flex gap-2 mb-4 shrink-0">
+      {level1Briefing.map((l, i) => (
+        <button
+          key={l.id}
+          onClick={() => onSelectLevel(i)}
+          className={`flex-1 py-2 text-center text-[10px] font-bold border rounded-none transition-colors ${i === activeSubLevel ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}
+        >
+          {l.id}
+        </button>
+      ))}
+    </div>
+    <div className="border-2 border-[#2D333B] bg-black/40 rounded-none p-4 mb-4 shadow-xl relative shrink-0">
       <div className="absolute top-0 right-0 px-2 py-0.5 bg-[#F85149] text-black text-[9px] font-bold tracking-widest">CONFIDENTIAL</div>
-      <div className="text-xs text-[#8B949E] mb-1 mt-2">FROM: <span className="text-[#58A6FF]">{level1Briefing.from}</span></div>
-      <div className="text-xs text-[#8B949E] mb-3 border-b border-[#2D333B] pb-3">SUBJECT: <span className="text-[#C9D1D9]">{level1Briefing.subject}</span></div>
-      <div className="text-[13px] leading-relaxed whitespace-pre-wrap">{level1Briefing.body}</div>
+      <div className="text-xs text-[#8B949E] mb-1 mt-2">FROM: <span className="text-[#58A6FF]">{level.from}</span></div>
+      <div className="text-xs text-[#8B949E] mb-3 border-b border-[#2D333B] pb-3">SUBJECT: <span className="text-[#C9D1D9]">{level.subject}</span></div>
+      <div className="text-[13px] leading-relaxed whitespace-pre-wrap">{level.body}</div>
       <ul className="mt-4 space-y-2 list-disc pl-5 text-[12px] text-[#3FB950]">
-        {level1Briefing.bullets.map((b, i) => (
+        {level.bullets.map((b, i) => (
           <li key={i}><span className="text-[#C9D1D9]">{b}</span></li>
         ))}
       </ul>
     </div>
-    <div className="mt-auto border-t-2 border-[#2D333B] pt-4">
+    <div className="mt-auto border-t-2 border-[#2D333B] pt-4 shrink-0 pb-16">
       <div className="text-[10px] uppercase text-[#8B949E] tracking-wider mb-2">AUTHORIZED HARDWARE</div>
       <div className="flex flex-wrap gap-2">
-        {level1Briefing.hardware.map((h, i) => (
+        {level.hardware.map((h, i) => (
           <span key={i} className="text-[10px] px-2 py-1 bg-[#D29922]/10 text-[#D29922] border border-[#D29922]/40 rounded-none uppercase">
             {h}
           </span>
@@ -503,9 +542,12 @@ const BriefingTab = () => (
   </div>
 );
 
+import { hapticCrash, hapticHeavy } from './haptics';
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const simMainRef = useRef<HTMLElement | null>(null);
+  const mobileSplitHostRef = useRef<HTMLDivElement | null>(null);
   const inspectPaintRef = useRef<Vehicle | null>(null);
   const [inspectPanel, setInspectPanel] = useState<{ vehicle: Vehicle; left: number; top: number } | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -529,7 +571,9 @@ export default function App() {
   
   // UI State
   const [introPhase, setIntroPhase] = useState<'splash' | 'home' | null>('splash');
-  const [mobileScreen, setMobileScreen] = useState<'briefing' | 'engineering' | 'execution'>('briefing');
+  const [mobileScreen, setMobileScreen] = useState<'briefing' | 'logic' | 'metrics'>('briefing');
+  const mobileScreenRef = useRef(mobileScreen);
+  mobileScreenRef.current = mobileScreen;
   const [isMobilePortrait, setIsMobilePortrait] = useState(() => {
     if (typeof window === 'undefined') return false;
     return narrowViewport() && window.matchMedia('(orientation: portrait)').matches;
@@ -539,6 +583,7 @@ export default function App() {
   const [sessionCrashes, setSessionCrashes] = useState(0);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [sessionTime, setSessionTime] = useState(0);
+  const [activeSubLevel, setActiveSubLevel] = useState(0);
 
   const editorRef = useRef<any>(null);
   const decorationsRef = useRef<any[]>([]);
@@ -578,8 +623,66 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => narrowViewport());
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const [mobileSplitHeight, setMobileSplitHeight] = useState(60);
+  const [mobileMinSplitPct, setMobileMinSplitPct] = useState(14);
+  const isDraggingMobileSplitRef = useRef(false);
   const resizeStartXRef = useRef(0);
   const resizeStartWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
+
+  useEffect(() => {
+    if (!isMobilePortrait) return;
+    const host = mobileSplitHostRef.current;
+    if (!host) return;
+    const measure = () => {
+      const hr = host.getBoundingClientRect().height;
+      if (hr <= 0) return;
+      const strip =
+        mobileScreen !== 'briefing' && (mobileScreen === 'metrics' || mobileScreen === 'logic') ? MOBILE_COLLAPSED_STRIP_PX : 0;
+      setMobileMinSplitPct(((MOBILE_SPLIT_HANDLE_PX + strip) / hr) * 100);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, [isMobilePortrait, mobileScreen]);
+
+  useEffect(() => {
+    if (!isMobilePortrait) return;
+    if (mobileScreen !== 'metrics' && mobileScreen !== 'logic') return;
+    setMobileSplitHeight((prev) => Math.max(prev, mobileMinSplitPct));
+  }, [isMobilePortrait, mobileScreen, mobileMinSplitPct]);
+
+  useEffect(() => {
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!isDraggingMobileSplitRef.current) return;
+      e.preventDefault();
+      const host = mobileSplitHostRef.current;
+      if (!host) return;
+      const rect = host.getBoundingClientRect();
+      const h = rect.height;
+      if (h <= 0) return;
+      const maxBottom = h * MOBILE_SPLIT_MAX_RATIO;
+      const stripPx =
+        mobileScreenRef.current === 'metrics' || mobileScreenRef.current === 'logic' ? MOBILE_COLLAPSED_STRIP_PX : 0;
+      const minBottomPx = MOBILE_SPLIT_HANDLE_PX + stripPx;
+      const bottomPx = Math.min(maxBottom, Math.max(minBottomPx, rect.bottom - e.clientY));
+      setMobileSplitHeight((bottomPx / h) * 100);
+    };
+
+    const handlePointerUp = () => {
+      isDraggingMobileSplitRef.current = false;
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, []);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
     phaseTimings: true,
     queue: true,
@@ -604,6 +707,9 @@ export default function App() {
   const dragStartCanvasRef = useRef({ x: 0, y: 0 });
   const panStartRef = useRef({ x: 0, y: 0 });
   const hasDraggedRef = useRef(false);
+  const activePointersRef = useRef<Map<number, {x: number, y: number}>>(new Map());
+  const pinchStartDistRef = useRef(0);
+  const pinchStartZoomRef = useRef(0);
   const [timeScale, setTimeScale] = useState<TimeScale>(1);
   const timeScaleRef = useRef<TimeScale>(1);
   const [showHeatmap, setShowHeatmap] = useState(false);
@@ -634,6 +740,25 @@ export default function App() {
 
   // Store accumulated demand per phase over the current cycle
   const cycleDemandRef = useRef<number[]>([]);
+  const skipConditionalAfterInjectRef = useRef(false);
+  const briefingSpawnMaskRef = useRef<'NS' | 'EW' | null>(null);
+
+  useEffect(() => {
+    if (!isMobilePortrait) {
+      briefingSpawnMaskRef.current = null;
+      setTrafficRates({ N: BASE_SPAWN_RATE, S: BASE_SPAWN_RATE, E: BASE_SPAWN_RATE, W: BASE_SPAWN_RATE });
+      return;
+    }
+    briefingSpawnMaskRef.current = activeSubLevel === 0 ? 'EW' : activeSubLevel === 1 ? 'NS' : null;
+    const base = BASE_SPAWN_RATE;
+    if (activeSubLevel === 0) {
+      setTrafficRates({ N: base, S: base, E: 0, W: 0 });
+    } else if (activeSubLevel === 1) {
+      setTrafficRates({ N: 0, S: 0, E: base, W: base });
+    } else {
+      setTrafficRates({ N: base, S: base, E: base, W: base });
+    }
+  }, [activeSubLevel, isMobilePortrait]);
   const cycleCounterRef = useRef(0);
   
   // Interpreter State
@@ -784,6 +909,7 @@ phase(4): # Flip to the other direction
       setCompiledPhases([]);
       setCompiledRules([]);
       setInjectedPhase(null);
+      skipConditionalAfterInjectRef.current = false;
       setLightState('RED');
       setTimer(0);
       return;
@@ -801,6 +927,7 @@ phase(4): # Flip to the other direction
       );
       setCurrentPhase(0);
       setInjectedPhase(null);
+      skipConditionalAfterInjectRef.current = false;
       setLightState('GREEN');
       setTimer(0);
       return;
@@ -809,6 +936,7 @@ phase(4): # Flip to the other direction
     setCompiledPhases([]);
     setCompiledRules([]);
     setInjectedPhase(null);
+    skipConditionalAfterInjectRef.current = false;
     setLightState('RED');
     setTimer(0);
   }, [programCode]);
@@ -858,6 +986,7 @@ phase(4): # Flip to the other direction
 
   const addLog = useCallback((event: string, color?: string) => {
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    console.log(`[phase] ${time} ${event}`);
     setLogs(prev => [{ id: Math.random().toString(), time, event, color }, ...prev].slice(0, 20));
   }, []);
 
@@ -871,6 +1000,7 @@ phase(4): # Flip to the other direction
     setIsCrashModalMinimized(false);
     setOffScreenQueues({});
     setInjectedPhase(null);
+    skipConditionalAfterInjectRef.current = false;
     setCurrentPhase(0);
     setLightState('GREEN');
     setTimer(0);
@@ -880,6 +1010,58 @@ phase(4): # Flip to the other direction
     setIsPlaying(true);
     addLog(reason === 'CRASH' ? 'CRASH RESET' : 'MANUAL RESET', reason === 'CRASH' ? 'var(--red)' : 'var(--minor)');
   }, [addLog]);
+
+  const isLoadedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isMobilePortrait) return;
+    loadSession().then((data) => {
+      if (data) {
+        if (data.programCode) setProgramCode(data.programCode);
+        if (data.mobileScreen) setMobileScreen(data.mobileScreen);
+        if (data.executionSplitActive !== undefined) setExecutionSplitActive(data.executionSplitActive);
+        if (data.zoom) setZoom(data.zoom);
+        if (data.pan) setPan(data.pan);
+        if (data.timeScale) setTimeScale(data.timeScale);
+        if (data.sessionTime) setSessionTime(data.sessionTime);
+        if (data.sessionCarsCleared) setSessionCarsCleared(data.sessionCarsCleared);
+        if (data.sessionCrashes) setSessionCrashes(data.sessionCrashes);
+        if (data.activeSubLevel !== undefined) setActiveSubLevel(data.activeSubLevel);
+        if (data.mobileSplitHeight !== undefined) setMobileSplitHeight(data.mobileSplitHeight);
+      }
+      isLoadedRef.current = true;
+    });
+  }, [isMobilePortrait]);
+
+  useEffect(() => {
+    if (!isMobilePortrait || !isLoadedRef.current) return;
+    const state = {
+      programCode,
+      mobileScreen,
+      executionSplitActive,
+      zoom,
+      pan,
+      timeScale,
+      sessionTime,
+      sessionCarsCleared,
+      sessionCrashes,
+      activeSubLevel,
+      mobileSplitHeight
+    };
+    const t = setTimeout(() => {
+      saveSession(state);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [isMobilePortrait, programCode, mobileScreen, executionSplitActive, zoom, pan, timeScale, sessionTime, sessionCarsCleared, sessionCrashes, activeSubLevel, mobileSplitHeight]);
+
+  const handleSelectLevel = useCallback((idx: number) => {
+    setActiveSubLevel(idx);
+    setProgramCode(level1Briefing[idx].initialCode);
+    setSessionCarsCleared(0);
+    setSessionCrashes(0);
+    setSessionTime(0);
+    resetSimulation('MANUAL');
+  }, [resetSimulation]);
 
   const applyTemplate = (code: string) => {
     if (!code) return;
@@ -1074,7 +1256,16 @@ phase(4): # Flip to the other direction
       if (cycleCounterRef.current % 2 === 0) {
         setTrafficRates(prev => {
           const next = { ...prev };
+          const mask = briefingSpawnMaskRef.current;
           Object.keys(next).forEach(dir => {
+            if (mask === 'EW' && (dir === 'E' || dir === 'W')) {
+              next[dir] = 0;
+              return;
+            }
+            if (mask === 'NS' && (dir === 'N' || dir === 'S')) {
+              next[dir] = 0;
+              return;
+            }
             const drift = (Math.random() - 0.5) * SPAWN_DRIFT_SPEED;
             next[dir] = Math.max(0.01, Math.min(0.2, next[dir] + drift));
           });
@@ -1180,7 +1371,7 @@ phase(4): # Flip to the other direction
       setTimer(0);
     } else if (lightState === 'RED' && timer >= DEFAULT_TIMINGS.allRed) {
       let matchedRule: ConditionalRule | null = null;
-      if (!injectedPhase) {
+      if (!injectedPhase && !skipConditionalAfterInjectRef.current) {
         for (const rule of compiledRules) {
            if ((offScreenQueues[rule.targetLaneId] || 0) > rule.threshold) {
                matchedRule = rule;
@@ -1195,6 +1386,7 @@ phase(4): # Flip to the other direction
           addLog('SENSOR OVERRIDE ACTIVE', 'var(--major)');
           setTimer(0);
       } else {
+          const hadInjection = !!injectedPhase;
           const nextPhaseIndex = (currentPhase + (injectedPhase ? 0 : 1)) % compiledPhases.length;
           const nextMovements = compiledPhases[nextPhaseIndex]?.commands.map((c) => c.target) || [];
           setInjectedPhase(null);
@@ -1202,6 +1394,11 @@ phase(4): # Flip to the other direction
           setCurrentPhase(nextPhaseIndex);
           addLog(`${formatActiveMovements(nextMovements)} START`, 'var(--major)');
           setTimer(0);
+          if (hadInjection) {
+            skipConditionalAfterInjectRef.current = true;
+          } else if (skipConditionalAfterInjectRef.current) {
+            skipConditionalAfterInjectRef.current = false;
+          }
       }
     }
   }, [timer, isPlaying, lightState, currentPhase, phaseTimings, activeMovements, compiledPhases, compiledRules, injectedPhase, offScreenQueues, addLog]);
@@ -1654,6 +1851,7 @@ phase(4): # Flip to the other direction
         isPlayingRef.current = false;
         setIsPlaying(false);
         addLog('CRASH DETECTED', 'var(--red)');
+        hapticCrash();
       }
     }
     u.cullSkid = performance.now() - m;
@@ -2037,6 +2235,13 @@ phase(4): # Flip to the other direction
 
   }, [activeMovements, lightState, offScreenQueues, bgFontsReady, showHeatmap, yieldMovements, crashInfo]);
 
+  const updateRef = useRef(update);
+  updateRef.current = update;
+  const drawRef = useRef(draw);
+  drawRef.current = draw;
+
+  const needsRedrawRef = useRef(true);
+
   const loop = useCallback((time: number) => {
     const tLoop = performance.now();
     let updateMs = 0;
@@ -2047,7 +2252,7 @@ phase(4): # Flip to the other direction
       let remaining = simStep;
       while (remaining > 1e-8) {
         const sub = Math.min(MAX_SIM_INTEGRATION_STEP, remaining);
-        update(time, sub);
+        updateRef.current(time, sub);
         remaining -= sub;
       }
       updateMs = performance.now() - u0;
@@ -2056,7 +2261,7 @@ phase(4): # Flip to the other direction
     const ctx = canvasRef.current?.getContext('2d');
     if (ctx) {
       const d0 = performance.now();
-      draw(ctx, time);
+      drawRef.current(ctx, time);
       drawMs = performance.now() - d0;
     }
     const totalMs = performance.now() - tLoop;
@@ -2087,16 +2292,32 @@ phase(4): # Flip to the other direction
     }
 
     lastTimeRef.current = time;
-    requestRef.current = requestAnimationFrame(loop);
-  }, [update, draw]);
+    if (isPlayingRef.current || isDraggingCanvasRef.current || needsRedrawRef.current) {
+      needsRedrawRef.current = false;
+      requestRef.current = requestAnimationFrame(loop);
+    } else {
+      requestRef.current = null;
+    }
+  }, []);
+
+  const triggerRedraw = useCallback(() => {
+    needsRedrawRef.current = true;
+    if (!requestRef.current) {
+      lastTimeRef.current = performance.now();
+      requestRef.current = requestAnimationFrame(loop);
+    }
+  }, [loop]);
 
   useEffect(() => {
     if (introPhase !== null) return;
-    requestRef.current = requestAnimationFrame(loop);
+    triggerRedraw();
     return () => {
-      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
+        requestRef.current = null;
+      }
     };
-  }, [loop, introPhase]);
+  }, [triggerRedraw, introPhase]);
 
   const handlePhaseTimingChange = (phaseIndex: number, val: number) => {
     setPhaseTimings((prev) => {
@@ -2127,9 +2348,14 @@ phase(4): # Flip to the other direction
     setIsPlaying((playing) => {
       const next = !playing;
       isPlayingRef.current = next;
+      if (next) triggerRedraw();
       return next;
     });
-  }, []);
+  }, [triggerRedraw]);
+
+  useEffect(() => {
+    triggerRedraw();
+  }, [zoom, pan, programCode, mobileScreen, isEditMode, currentPhase, triggerRedraw]);
 
   const dismissIntroSplash = useCallback(() => setIntroPhase('home'), []);
 
@@ -2155,14 +2381,38 @@ phase(4): # Flip to the other direction
   }, []);
 
   const handleCanvasPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    isDraggingCanvasRef.current = true;
-    hasDraggedRef.current = false;
-    dragStartCanvasRef.current = { x: e.clientX, y: e.clientY };
-    panStartRef.current = pan;
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointersRef.current.size === 2) {
+      const [p1, p2] = Array.from(activePointersRef.current.values());
+      pinchStartDistRef.current = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      setZoom((currentZoom) => {
+        pinchStartZoomRef.current = currentZoom;
+        return currentZoom;
+      });
+      isDraggingCanvasRef.current = false;
+    } else if (activePointersRef.current.size === 1) {
+      isDraggingCanvasRef.current = true;
+      hasDraggedRef.current = false;
+      dragStartCanvasRef.current = { x: e.clientX, y: e.clientY };
+      panStartRef.current = pan;
+    }
     (e.target as Element).setPointerCapture(e.pointerId);
   }, [pan]);
 
   const handleCanvasPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    if (activePointersRef.current.size === 2) {
+      const [p1, p2] = Array.from(activePointersRef.current.values());
+      const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      if (pinchStartDistRef.current > 0) {
+        const ratio = dist / pinchStartDistRef.current;
+        setZoom(Math.max(0.5, Math.min(3, pinchStartZoomRef.current * ratio)));
+      }
+      return;
+    }
+    
     if (!isDraggingCanvasRef.current) return;
     const dx = e.clientX - dragStartCanvasRef.current.x;
     const dy = e.clientY - dragStartCanvasRef.current.y;
@@ -2176,8 +2426,13 @@ phase(4): # Flip to the other direction
   }, []);
 
   const handleCanvasPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!isDraggingCanvasRef.current) return;
-    isDraggingCanvasRef.current = false;
+    activePointersRef.current.delete(e.pointerId);
+    if (activePointersRef.current.size < 2) {
+       pinchStartDistRef.current = 0;
+    }
+    if (activePointersRef.current.size === 0) {
+       isDraggingCanvasRef.current = false;
+    }
     (e.target as Element).releasePointerCapture(e.pointerId);
 
     if (hasDraggedRef.current) return;
@@ -2260,6 +2515,11 @@ phase(4): # Flip to the other direction
     );
   }
 
+  const atMobileBottomMin =
+    mobileScreen !== 'briefing' &&
+    (mobileScreen === 'metrics' || mobileScreen === 'logic') &&
+    mobileSplitHeight <= mobileMinSplitPct + 1.5;
+
   if (isMobilePortrait) {
     return (
       <div className="h-[100dvh] w-full flex flex-col bg-[#0D0F12] overflow-hidden border-2 border-[#2D333B] relative crt-bezel">
@@ -2282,109 +2542,54 @@ phase(4): # Flip to the other direction
           </div>
         </header>
 
-        <div className="flex-1 min-h-0 relative">
-          <div className={`absolute inset-0 z-20 transition-opacity duration-300 ${!executionSplitActive && mobileScreen === 'briefing' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-            <BriefingTab />
-          </div>
-
-          <div className={`absolute inset-0 z-20 bg-[#0D0F12] overflow-y-auto transition-opacity duration-300 ${!executionSplitActive && mobileScreen === 'engineering' ? 'opacity-100' : 'opacity-0 pointer-events-none'} p-2`}>
-            <div className="flex flex-col gap-2 h-full">
-              <div className="flex items-center justify-between gap-1 mb-1">
-                 <button onClick={() => applyTemplate(userTemplate)} className={`flex-1 text-[10px] py-1.5 rounded-none font-mono border transition-all ${programCode === userTemplate ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}>CUSTOM</button>
-                 <button onClick={saveUserTemplate} className="px-3 py-1.5 rounded-none bg-black/20 border border-[#2D333B] text-[#C9D1D9] hover:text-[#3FB950] transition-colors"><Save size={14} /></button>
-                 <div className="w-[1px] h-5 bg-[#2D333B] mx-1" />
-                 {PHASE_TEMPLATES.map((t) => (
-                    <button key={t.name} onClick={() => applyTemplate(t.code)} className={`flex-1 text-[10px] py-1.5 rounded-none font-mono border transition-all ${programCode === t.code ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}>{t.shortLabel}</button>
-                 ))}
-              </div>
-              <div className="flex flex-col gap-1">
-                <div className="text-[10px] text-[#3FB950] font-mono uppercase tracking-wide leading-tight">{engineeringTemplateBlurb.title}</div>
-                <div className="text-[10px] text-[#8B949E] font-mono leading-snug">{engineeringTemplateBlurb.body}</div>
-              </div>
-              <div className="flex min-h-0 flex-1 flex-col">
-                <MobileOmniCorpEditor
-                  programCode={programCode}
-                  setProgramCode={setProgramCode}
-                  appendPhase={appendPhase}
-                  deleteLastLine={deleteLastLine}
-                />
-              </div>
-              {programError && (
-                <div className="text-[11px] text-[#F85149] font-mono whitespace-pre-wrap leading-tight bg-[#F85149]/10 p-2 border border-[#F85149]/30">
-                  {programError}
-                </div>
-              )}
-              <div className="mt-auto pt-2 pb-2">
-                <button 
-                  onClick={() => {
-                      compile();
-                      addLog("PROGRAM UPDATED", "var(--green)");
-                      if (!programError) {
-                        setExecutionSplitActive(true);
-                        setSessionCarsCleared(0);
-                        setSessionCrashes(0);
-                        setSessionTime(0);
-                        setZoom(0.8);
-                      }
-                  }}
-                  className="w-full text-[14px] bg-[#3FB950]/20 text-[#3FB950] py-3 border-2 border-[#3FB950] rounded-none font-bold uppercase tracking-wider shadow-[0_0_15px_rgba(63,185,80,0.15)]"
-                >
-                  COMPILE & RUN
-                </button>
-              </div>
-            </div>
+        <div ref={mobileSplitHostRef} className="flex-1 min-h-0 relative">
+          <div className={`absolute inset-0 z-30 transition-opacity duration-300 ${mobileScreen === 'briefing' ? 'opacity-100 bg-[#0D0F12]' : 'opacity-0 pointer-events-none'}`}>
+            <BriefingTab 
+              level={level1Briefing[activeSubLevel] || level1Briefing[0]} 
+              activeSubLevel={activeSubLevel} 
+              onSelectLevel={(idx) => {
+                setActiveSubLevel(idx);
+                setProgramCode(level1Briefing[idx].initialCode);
+                setSessionCarsCleared(0);
+                setSessionCrashes(0);
+                setSessionTime(0);
+                resetSimulation('MANUAL');
+              }} 
+            />
           </div>
 
           <main 
             ref={simMainRef}
-            className={`absolute left-0 w-full transition-all duration-500 ease-in-out flex items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]
-              ${executionSplitActive ? 'top-0 h-[50%] border-b-2 border-[#2D333B] z-10' : 'top-0 h-full z-0'} 
-              ${!executionSplitActive && mobileScreen !== 'execution' ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+            style={{ height: mobileScreen !== 'briefing' ? `${100 - mobileSplitHeight}%` : '100%' }}
+            className={`absolute left-0 top-0 w-full transition-all duration-500 ease-in-out flex flex-col items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]
+              ${mobileScreen !== 'briefing' ? 'border-b-2 border-[#2D333B] z-10' : 'z-0 opacity-0 pointer-events-none'}
             `}
           >
-            <div className="absolute top-4 left-4 z-20 flex gap-2">
-              <button onClick={togglePlayback} className={`p-2 rounded-none border shadow-xl ${isPlaying ? 'border-[#D29922]/60 bg-[#D29922]/15 text-[#D29922]' : 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950]'}`}>
-                {isPlaying ? <Pause size={16} /> : <Play size={16} />}
-              </button>
-              {TIME_SCALE_OPTIONS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setTimeScale(s)}
-                  className={`min-w-[2rem] py-1.5 px-2 rounded-none text-[10px] font-mono font-bold border transition-all shadow-xl ${
-                    timeScale === s
-                      ? 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950]'
-                      : 'border-[#2D333B] bg-[#1A1D23] text-[#8B949E] hover:border-[#3FB950]/50 hover:text-[#C9D1D9]'
-                  }`}
-                >
-                  {s}x
+            <div className="absolute bottom-2 left-0 w-full px-2 z-20 flex justify-between items-end pointer-events-none">
+              <div className="flex gap-2 pointer-events-auto">
+                <button onClick={togglePlayback} className={`p-2 rounded-none border shadow-xl ${isPlaying ? 'border-[#D29922]/60 bg-[#D29922]/15 text-[#D29922]' : 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950]'}`}>
+                  {isPlaying ? <Pause size={16} /> : <Play size={16} />}
                 </button>
-              ))}
-            </div>
-            <div className="absolute top-4 right-4 z-20 flex flex-col gap-2">
-              <button
-                onClick={() => setZoom((z) => Math.min(3, z + ZOOM_STEP))}
-                className="p-1.5 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
-                title="Zoom In"
-              >
-                <Plus size={16} />
-              </button>
-              <button
-                onClick={() => setZoom((z) => Math.max(0.5, z - ZOOM_STEP))}
-                className="p-1.5 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
-                title="Zoom Out"
-              >
-                <Minus size={16} />
-              </button>
-              <button
-                onClick={() => {
-                  setZoom(executionSplitActive ? 0.8 : defaultZoom());
-                  setPan({ x: 0, y: 0 });
-                }}
-                className="py-1 px-1 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[10px] font-mono text-[#8B949E] hover:text-white transition-all shadow-xl"
-              >
-                RST
-              </button>
+                {TIME_SCALE_OPTIONS.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setTimeScale(s)}
+                    className={`min-w-[2rem] py-1 px-1 rounded-none text-[10px] font-mono font-bold border transition-all shadow-xl ${
+                      timeScale === s
+                        ? 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950]'
+                        : 'border-[#2D333B] bg-[#1A1D23] text-[#8B949E] hover:border-[#3FB950]/50 hover:text-[#C9D1D9]'
+                    }`}
+                  >
+                    {s}x
+                  </button>
+                ))}
+              </div>
+              <div className="flex flex-col gap-2 pointer-events-auto">
+                <button onClick={() => setZoom((z) => Math.min(3, z + ZOOM_STEP))} className="p-1.5 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group" title="Zoom In"><Plus size={16} /></button>
+                <button onClick={() => setZoom((z) => Math.max(0.5, z - ZOOM_STEP))} className="p-1.5 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group" title="Zoom Out"><Minus size={16} /></button>
+                <button onClick={() => { setZoom(0.8); setPan({ x: 0, y: 0 }); }} className="py-1 px-1 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[10px] font-mono text-[#8B949E] hover:text-white transition-all shadow-xl">RST</button>
+              </div>
             </div>
             <canvas 
               ref={canvasRef} 
@@ -2400,44 +2605,188 @@ phase(4): # Flip to the other direction
             />
           </main>
 
-          <div className={`absolute left-0 bottom-0 w-full h-[50%] z-20 bg-[#0D0F12] flex flex-col transition-transform duration-500 ease-in-out ${executionSplitActive ? 'translate-y-0' : 'translate-y-[100%]'}`}>
-            <div className="flex bg-[#1A1D23] border-b-2 border-[#2D333B]">
-              <div className="flex-1 p-2 border-r-2 border-[#2D333B] flex flex-col items-center">
-                <span className="text-[9px] text-[#8B949E] font-mono">CLEARED</span>
-                <span className="text-[16px] text-[#3FB950] font-mono font-bold">{sessionCarsCleared}</span>
+          <div 
+            style={{ height: `${mobileSplitHeight}%` }}
+            className={`absolute left-0 bottom-0 w-full z-20 bg-[#000000] flex flex-col min-h-0 overflow-hidden transition-transform duration-500 ease-in-out ${mobileScreen !== 'briefing' ? 'translate-y-0' : 'translate-y-[100%]'}`}
+          >
+            {mobileScreen !== 'briefing' && (
+              <div 
+                className="w-full h-4 bg-[#1A1D23] border-t border-[#2D333B] flex items-center justify-center shrink-0 cursor-row-resize touch-none z-30"
+                onPointerDown={(e) => {
+                  isDraggingMobileSplitRef.current = true;
+                  (e.target as Element).setPointerCapture(e.pointerId);
+                }}
+              >
+                <div className="w-12 h-1 bg-[#8B949E] rounded-full opacity-50" />
               </div>
-              <div className="flex-1 p-2 border-r-2 border-[#2D333B] flex flex-col items-center">
-                <span className="text-[9px] text-[#8B949E] font-mono">CRASHES</span>
-                <span className={`text-[16px] font-mono font-bold ${sessionCrashes > 0 ? 'text-[#F85149]' : 'text-[#8B949E]'}`}>{sessionCrashes}</span>
-              </div>
-              <div className="flex-1 p-2 flex flex-col items-center">
-                <span className="text-[9px] text-[#8B949E] font-mono">TIME</span>
-                <span className="text-[16px] text-[#58A6FF] font-mono font-bold">{Math.floor(sessionTime / 60).toString().padStart(2, '0')}:{(sessionTime % 60).toString().padStart(2, '0')}</span>
-              </div>
-            </div>
-            <div className="flex-1 min-h-0 relative bg-[#0D0F12]">
-              <Editor
-                height="100%"
-                defaultLanguage="python"
-                theme="vs-dark"
-                value={programCode}
-                options={{ readOnly: true, minimap: { enabled: false }, lineNumbers: "on", fontSize: 11, fontFamily: "'JetBrains Mono', monospace", scrollBeyondLastLine: false, wordWrap: "on", padding: { top: 8, bottom: 8 } }}
-                onMount={handleEditorDidMount}
-              />
-            </div>
-            <div className="p-2 bg-[#1A1D23] border-t-2 border-[#2D333B]">
-               <button onClick={() => setExecutionSplitActive(false)} className="w-full py-2 border-2 border-[#F85149] bg-[#F85149]/10 text-[#F85149] font-mono font-bold text-[12px] uppercase">STOP / EDIT</button>
-            </div>
+            )}
+            
+            {mobileScreen === 'logic' && (
+              <>
+                {atMobileBottomMin ? (
+                  <div className="shrink-0 flex items-stretch gap-2 px-2 py-1 bg-[#1A1D23] border-b border-[#2D333B] min-h-[48px]">
+                    <div className="flex flex-col min-w-0 flex-1 justify-center gap-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[9px] font-mono font-bold text-[#3FB950] truncate max-w-[40%]">
+                          {compiledPhases[currentPhase]?.label || `PHASE_${currentPhase + 1}`}
+                        </span>
+                        <span className="text-[11px] font-mono text-[#3FB950] shrink-0">{timer.toFixed(1)}s</span>
+                        <span
+                          className={`text-[8px] font-bold px-1 py-0.5 rounded shrink-0 ${
+                            lightState === 'GREEN'
+                              ? 'bg-[#3FB950] text-[#0D0F12]'
+                              : lightState === 'YELLOW'
+                                ? 'bg-[#D29922] text-[#0D0F12]'
+                                : 'bg-[#F85149] text-[#0D0F12]'
+                          }`}
+                        >
+                          {lightState}
+                        </span>
+                        {isPlaying && (
+                          <span className="text-[8px] bg-[#3FB950] text-[#0D0F12] px-1 py-0.5 rounded font-bold shrink-0">ACTIVE</span>
+                        )}
+                      </div>
+                      <div className="h-1 bg-[#2D333B] rounded-full overflow-hidden w-full max-w-full">
+                        <div className="h-full bg-[#3FB950] transition-all duration-100" style={{ width: `${getPercentage()}%` }} />
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-0.5 content-center max-w-[52%] min-w-0">
+                      {Array.from(new Set([...activeMovements, ...yieldMovements])).slice(0, 8).map((m) => {
+                        const y = yieldMovements.includes(m);
+                        return (
+                          <span
+                            key={m}
+                            title={MovementLabels[m]}
+                            className={`flex items-center justify-center w-5 h-5 rounded border shrink-0 ${
+                              y ? 'bg-[#D29922]/10 border-[#D29922]/30 text-[#D29922]' : 'bg-[#3FB950]/10 border-[#3FB950]/30 text-[#3FB950]'
+                            }`}
+                          >
+                            {getMovementIcon(m, 10)}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex-1 min-h-0 flex flex-col p-2 overflow-y-auto">
+                    <div className="flex flex-col gap-2 h-full">
+                      <div className="flex items-center justify-between gap-1 mb-1">
+                        <button
+                          onClick={() => applyTemplate(userTemplate)}
+                          className={`flex-1 text-[10px] py-1.5 rounded-none font-mono border transition-all ${programCode === userTemplate ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}
+                        >
+                          CUSTOM
+                        </button>
+                        <button
+                          onClick={saveUserTemplate}
+                          className="px-3 py-1.5 rounded-none bg-black/20 border border-[#2D333B] text-[#C9D1D9] hover:text-[#3FB950] transition-colors"
+                        >
+                          <Save size={14} />
+                        </button>
+                        <div className="w-[1px] h-5 bg-[#2D333B] mx-1" />
+                        {PHASE_TEMPLATES.map((t) => (
+                          <button
+                            key={t.name}
+                            onClick={() => applyTemplate(t.code)}
+                            className={`flex-1 text-[10px] py-1.5 rounded-none font-mono border transition-all ${programCode === t.code ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}
+                          >
+                            {t.shortLabel}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <div className="text-[10px] text-[#56D364] font-mono uppercase tracking-wide leading-tight">{engineeringTemplateBlurb.title}</div>
+                        <div className="text-[10px] text-[#b7bdc8] font-mono leading-snug">{engineeringTemplateBlurb.body}</div>
+                      </div>
+                      <div className="flex min-h-0 flex-1 flex-col">
+                        <MobileOmniCorpEditor
+                          programCode={programCode}
+                          setProgramCode={setProgramCode}
+                          appendPhase={appendPhase}
+                          deleteLastLine={deleteLastLine}
+                        />
+                      </div>
+                      {programError && (
+                        <div className="text-[11px] text-[#F85149] font-mono whitespace-pre-wrap leading-tight bg-[#F85149]/10 p-2 border border-[#F85149]/30">
+                          {programError}
+                        </div>
+                      )}
+                      <div className="mt-auto pt-2 pb-2">
+                        <button
+                          onClick={() => {
+                            hapticHeavy();
+                            compile();
+                            addLog('PROGRAM UPDATED', 'var(--green)');
+                            if (!programError) {
+                              setSessionCarsCleared(0);
+                              setSessionCrashes(0);
+                              setSessionTime(0);
+                              setZoom(0.8);
+                              isPlayingRef.current = true;
+                              setIsPlaying(true);
+                            }
+                          }}
+                          className="w-full text-[14px] bg-[#3FB950]/20 text-[#3FB950] py-3 border-2 border-[#3FB950] rounded-none font-bold uppercase tracking-wider shadow-[0_0_15px_rgba(63,185,80,0.15)]"
+                        >
+                          COMPILE & RUN
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {mobileScreen === 'metrics' && (
+              <>
+                <div className="shrink-0 flex bg-[#1A1D23] border-b-2 border-[#2D333B]">
+                  <div className="flex-1 p-2 border-r-2 border-[#2D333B] flex flex-col items-center justify-center">
+                    <span className="text-[9px] text-[#8B949E] font-mono">CLEARED</span>
+                    <span className="text-[16px] text-[#3FB950] font-mono font-bold">{sessionCarsCleared}</span>
+                  </div>
+                  <div className="flex-1 p-2 border-r-2 border-[#2D333B] flex flex-col items-center justify-center">
+                    <span className="text-[9px] text-[#8B949E] font-mono">CRASHES</span>
+                    <span className={`text-[16px] font-mono font-bold ${sessionCrashes > 0 ? 'text-[#F85149]' : 'text-[#8B949E]'}`}>{sessionCrashes}</span>
+                  </div>
+                  <div className="flex-1 p-2 flex flex-col items-center justify-center">
+                    <span className="text-[9px] text-[#8B949E] font-mono">TIME</span>
+                    <span className="text-[16px] text-[#58A6FF] font-mono font-bold">
+                      {Math.floor(sessionTime / 60)
+                        .toString()
+                        .padStart(2, '0')}
+                      :{(sessionTime % 60).toString().padStart(2, '0')}
+                    </span>
+                  </div>
+                </div>
+                {!atMobileBottomMin && (
+                  <div className="flex-1 min-h-0 relative bg-[#0D0F12]">
+                    <div className="p-3 flex flex-col gap-4 overflow-y-auto scrollbar-hide h-full">
+                      <CollapsibleSection id="flow" title="TRAFFIC RATES" isCollapsed={collapsed.flow} onToggle={toggleCollapsed}>
+                        <TrafficFlowRates rates={trafficRates} />
+                      </CollapsibleSection>
+                      <CollapsibleSection id="queue" title="CONGESTION ANALYTICS" isCollapsed={collapsed.queue} onToggle={toggleCollapsed}>
+                        <QueueChart history={queueHistory} />
+                      </CollapsibleSection>
+                      <CollapsibleSection id="analytics" title="PHASE METRICS" isCollapsed={collapsed.analytics} onToggle={toggleCollapsed}>
+                        <AnalyticalChart history={timingHistory} />
+                      </CollapsibleSection>
+                      <CollapsibleSection id="log" title="PHASE LOG" isCollapsed={collapsed.log} onToggle={toggleCollapsed}>
+                        <PhaseLogList logs={logs} maxHeightClass="max-h-36" />
+                      </CollapsibleSection>
+                      <div className="h-4 shrink-0" />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
 
-        {!executionSplitActive && (
-          <nav className="shrink-0 h-[60px] bg-[#1A1D23] border-t-2 border-[#2D333B] flex z-30 relative">
-             <button onClick={() => setMobileScreen('briefing')} className={`flex-1 flex flex-col items-center justify-center gap-1 font-mono text-[10px] ${mobileScreen === 'briefing' ? 'text-[#3FB950] bg-white/5 border-t-2 border-[#3FB950]' : 'text-[#8B949E] border-t-2 border-transparent'}`}><Mail size={20}/>BRIEFING</button>
-             <button onClick={() => setMobileScreen('engineering')} className={`flex-1 flex flex-col items-center justify-center gap-1 font-mono text-[10px] ${mobileScreen === 'engineering' ? 'text-[#3FB950] bg-white/5 border-t-2 border-[#3FB950]' : 'text-[#8B949E] border-t-2 border-transparent'}`}><Terminal size={20}/>ENGINEERING</button>
-             <button onClick={() => setMobileScreen('execution')} className={`flex-1 flex flex-col items-center justify-center gap-1 font-mono text-[10px] ${mobileScreen === 'execution' ? 'text-[#3FB950] bg-white/5 border-t-2 border-[#3FB950]' : 'text-[#8B949E] border-t-2 border-transparent'}`}><MapIcon size={20}/>EXECUTION</button>
-          </nav>
-        )}
+        <nav className="shrink-0 h-[60px] bg-[#1A1D23] border-t-2 border-[#2D333B] flex z-40 relative">
+           <button onClick={() => setMobileScreen('briefing')} className={`flex-1 flex flex-col items-center justify-center gap-1 font-mono text-[10px] ${mobileScreen === 'briefing' ? 'text-[#3FB950] bg-white/5 border-t-2 border-[#3FB950]' : 'text-[#8B949E] border-t-2 border-transparent'}`}><Mail size={20}/>DIRECTIVE</button>
+           <button onClick={() => setMobileScreen('logic')} className={`flex-1 flex flex-col items-center justify-center gap-1 font-mono text-[10px] ${mobileScreen === 'logic' ? 'text-[#3FB950] bg-white/5 border-t-2 border-[#3FB950]' : 'text-[#8B949E] border-t-2 border-transparent'}`}><Terminal size={20}/>LOGIC</button>
+           <button onClick={() => setMobileScreen('metrics')} className={`flex-1 flex flex-col items-center justify-center gap-1 font-mono text-[10px] ${mobileScreen === 'metrics' ? 'text-[#3FB950] bg-white/5 border-t-2 border-[#3FB950]' : 'text-[#8B949E] border-t-2 border-transparent'}`}><Activity size={20}/>METRICS</button>
+        </nav>
 
         <AnimatePresence>
           {crashInfo && (
@@ -2453,7 +2802,7 @@ phase(4): # Flip to the other direction
                   <div className="mt-5 flex flex-col gap-2">
                     <button onClick={() => resetSimulation('CRASH')} className="w-full border-2 border-[#F85149] bg-[#F85149]/15 py-3 text-[13px] font-mono font-bold text-[#F85149] uppercase">RESET SIMULATION</button>
                     {executionSplitActive && (
-                      <button onClick={() => { resetSimulation('CRASH'); setExecutionSplitActive(false); setMobileScreen('engineering'); }} className="w-full border-2 border-[#2D333B] bg-black/20 py-2 text-[11px] font-mono text-[#C9D1D9] uppercase">RETURN TO EDITOR</button>
+                      <button onClick={() => { resetSimulation('CRASH'); setExecutionSplitActive(false); setMobileScreen('logic'); }} className="w-full border-2 border-[#2D333B] bg-black/20 py-2 text-[11px] font-mono text-[#C9D1D9] uppercase">RETURN TO EDITOR</button>
                     )}
                   </div>
                 </div>
@@ -2797,21 +3146,7 @@ phase(4): # Flip to the other direction
         </CollapsibleSection>
 
         <CollapsibleSection id="log" title="PHASE LOG" isCollapsed={collapsed.log} onToggle={toggleCollapsed}>
-            <div className="overflow-y-auto space-y-1 h-64 pr-2 scrollbar-hide">
-                <AnimatePresence initial={false}>
-                    {logs.map(log => (
-                        <motion.div 
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            key={log.id} 
-                            className="font-mono text-xs flex justify-between border-b border-white/5 py-1"
-                        >
-                            <span className="text-[#C9D1D9]/60 shrink-0">{log.time}</span>
-                            <span className="whitespace-pre-line leading-tight pl-3 text-right" style={{ color: log.color || 'var(--major)' }}>{log.event}</span>
-                        </motion.div>
-                    ))}
-                </AnimatePresence>
-            </div>
+          <PhaseLogList logs={logs} maxHeightClass="h-64" />
         </CollapsibleSection>
 
         <div className="mt-auto space-y-4 pt-4 border-t border-[#2D333B]">

@@ -122,11 +122,25 @@ export function parseTrafficProgram(code: string): ParseResult {
         const insertCommands: PhaseCommand[] = [];
         for (const act of acts) {
           const parts = act.split('.');
-          if (parts.length === 2 && KEYWORD_MAP[parts[0]] && (parts[1] === 'GO' || parts[1] === 'YIELD')) {
-            insertCommands.push({ target: KEYWORD_MAP[parts[0]], action: parts[1] as 'GO' | 'YIELD' });
-          } else {
-            return { phases: [], error: `Invalid insert command on line ${i + 1}: ${act}` };
+          if (parts.length === 2 && (parts[1] === 'GO' || parts[1] === 'YIELD')) {
+            const action = parts[1] as 'GO' | 'YIELD';
+            if (parts[0].endsWith('_ALL')) {
+              const dir = parts[0].split('_')[0];
+              if (['NORTH', 'SOUTH', 'EAST', 'WEST'].includes(dir)) {
+                ['LEFT', 'STRAIGHT', 'RIGHT'].forEach(turn => {
+                  const m = KEYWORD_MAP[`${dir}_${turn}`];
+                  if (m !== undefined && !insertCommands.some(c => c.target === m && c.action === action)) {
+                    insertCommands.push({ target: m, action });
+                  }
+                });
+                continue;
+              }
+            } else if (KEYWORD_MAP[parts[0]]) {
+              insertCommands.push({ target: KEYWORD_MAP[parts[0]], action });
+              continue;
+            }
           }
+          return { phases: [], error: `Invalid insert command on line ${i + 1}: ${act}` };
         }
         rules.push({ ...currentRuleCondition, insertCommands });
         currentRuleCondition = null;
@@ -147,6 +161,21 @@ export function parseTrafficProgram(code: string): ParseResult {
     }
 
     let foundKeyword = false;
+    
+    const allMatch = line.match(/^(NORTH|SOUTH|EAST|WEST)_ALL\.(GO|YIELD)$/);
+    if (allMatch) {
+      const dir = allMatch[1];
+      const action = allMatch[2] as 'GO' | 'YIELD';
+      const turns = ['LEFT', 'STRAIGHT', 'RIGHT'];
+      for (const turn of turns) {
+        const movement = KEYWORD_MAP[`${dir}_${turn}`];
+        if (movement !== undefined && !currentCommands.some(c => c.target === movement && c.action === action)) {
+          currentCommands.push({ target: movement, action });
+        }
+      }
+      continue;
+    }
+
     for (const [keyword, movement] of Object.entries(KEYWORD_MAP)) {
       if (line === `${keyword}.GO` || line === `${keyword}.YIELD`) {
         const action = line.endsWith('.GO') ? 'GO' : 'YIELD';

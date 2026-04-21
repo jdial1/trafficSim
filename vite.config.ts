@@ -14,11 +14,11 @@ export default defineConfig(({mode}) => {
         registerType: 'prompt',
         includeAssets: ['pwa-icon.svg'],
         manifest: {
-          name: 'OmniCorp Traffic Terminal',
-          short_name: 'TrafficSim',
-          description: 'Zachtronics-style traffic controller programming interface.',
-          theme_color: '#0D0F12',
-          background_color: '#0D0F12',
+          name: 'GosAvtomatika Traffic Terminal',
+          short_name: 'GosAvtomatika',
+          description: 'Sovietwave traffic puzzle game.',
+          theme_color: '#000000',
+          background_color: '#000000',
           display: 'fullscreen',
           icons: [
             {
