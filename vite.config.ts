@@ -19,7 +19,7 @@ export default defineConfig(({mode}) => {
           description: 'Zachtronics-style traffic controller programming interface.',
           theme_color: '#0D0F12',
           background_color: '#0D0F12',
-          display: 'standalone',
+          display: 'fullscreen',
           icons: [
             {
               src: 'pwa-icon.svg',
