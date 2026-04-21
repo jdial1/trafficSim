@@ -654,6 +654,20 @@ phase(2): # East/West Priority
     # Lefts yield to oncoming thru traffic
     EAST_LEFT.YIELD
     WEST_LEFT.YIELD
+
+
+phase(3): # Protected Lefts
+    NORTH_LEFT.GO
+    SOUTH_LEFT.GO
+    # Usually you allow right turns from the side streets here too
+    EAST_RIGHT.GO
+    WEST_RIGHT.GO
+
+phase(4): # Flip to the other direction
+    EAST_LEFT.GO
+    WEST_LEFT.GO
+    NORTH_RIGHT.GO
+    SOUTH_RIGHT.GO
 `);
   const [compiledPhases, setCompiledPhases] = useState<Phase[]>([]);
   const [compiledRules, setCompiledRules] = useState<ConditionalRule[]>([]);
