@@ -442,6 +442,9 @@ export const GameIntro = ({
     await supabase.auth.signOut();
   };
 
+  const introCta =
+    'min-h-[52px] w-full border-2 px-3 py-3 text-[12px] font-bold uppercase tracking-wide transition-colors font-mono flex items-center justify-center gap-2 leading-none';
+
   return (
     <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center overflow-y-auto bg-[#0a0b0e] px-6 py-12 font-mono text-[#d1d5db] crt-bezel crt-snap">
       <div className="flex w-full max-w-sm flex-col items-center gap-8">
@@ -467,10 +470,10 @@ export const GameIntro = ({
             <button
               type="button"
               onClick={() => void onInstallApp()}
-              className="flex w-full items-center justify-center gap-2 border border-[#c5922e] bg-[#c5922e]/10 py-3 text-[11px] font-black uppercase tracking-wider text-[#c5922e] transition-colors hover:bg-[#c5922e]/20"
+              className={`${introCta} border-[#c5922e] bg-[#c5922e]/10 text-[#c5922e] hover:bg-[#c5922e]/20`}
             >
-              <Download size={16} strokeWidth={2} className="shrink-0" />
-              {CTA.INSTALL_APP}
+              <Download size={16} strokeWidth={2} className="size-4 shrink-0" />
+              <span className="min-w-0 text-center">{CTA.INSTALL_APP}</span>
             </button>
           )}
           {user ? (
@@ -482,14 +485,14 @@ export const GameIntro = ({
                 <button
                   type="button"
                   onClick={() => void handleLogout()}
-                  className="flex-1 border border-[#8B949E] bg-transparent py-3 text-[11px] font-black uppercase tracking-wider text-[#8B949E] transition-colors hover:bg-[#8B949E]/10"
+                  className={`${introCta} flex-1 border-[#8B949E] bg-transparent text-[#8B949E] hover:bg-[#8B949E]/10`}
                 >
                   {CTA.SIGN_OUT}
                 </button>
                 <button
                   type="button"
                   onClick={onEnterGame}
-                  className="flex-[2] border-2 border-[#47a85d] bg-[#47a85d]/10 py-3 text-[13px] font-black uppercase tracking-[0.2em] text-[#47a85d] transition-colors hover:bg-[#47a85d]/25"
+                  className={`${introCta} flex-[2] border-[#47a85d] bg-[#47a85d]/10 text-[#47a85d] hover:bg-[#47a85d]/25`}
                 >
                   {CTA.ENTER_TERMINAL}
                 </button>
@@ -500,14 +503,14 @@ export const GameIntro = ({
               <button
                 type="button"
                 onClick={() => void handleLogin()}
-                className="w-full border border-[#5ba4e5] bg-[#5ba4e5]/10 py-3 text-[11px] font-black uppercase tracking-wider text-[#5ba4e5] transition-colors hover:bg-[#5ba4e5]/25"
+                className={`${introCta} border-[#5ba4e5] bg-[#5ba4e5]/10 text-[#5ba4e5] hover:bg-[#5ba4e5]/25`}
               >
                 {CTA.LOGIN_GOOGLE}
               </button>
               <button
                 type="button"
                 onClick={onEnterGame}
-                className="w-full border-2 border-[#47a85d] bg-[#47a85d]/10 py-4 text-[14px] font-black uppercase tracking-[0.28em] text-[#47a85d] transition-colors hover:bg-[#47a85d]/25"
+                className={`${introCta} border-[#47a85d] bg-[#47a85d]/10 text-[#47a85d] hover:bg-[#47a85d]/25`}
               >
                 {CTA.ENTER_GUEST}
               </button>
