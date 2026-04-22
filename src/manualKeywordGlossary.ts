@@ -53,7 +53,7 @@ function bestMatchAt(text: string, i: number): Match | null {
   add(tryLiteral(text, i, 'EXCLUSIVE_PEDESTRIAN_PHASE', TIPS.exclusivePed));
   add(tryLiteral(text, i, 'MOVEMENT.MODE', TIPS.movementDotMode));
   add(tryLiteral(text, i, 'phase(n)', TIPS.phaseHeader));
-  add(tryLiteral(text, i, 'GOSAVTOMATIKA', TIPS.org));
+  add(tryLiteral(text, i, 'OGAS', TIPS.org));
   add(tryLiteral(text, i, 'SEC-082', TIPS.sec082));
   add(tryLiteral(text, i, 'EAST_*', TIPS.eastStar));
   add(tryLiteral(text, i, 'WEST_*', TIPS.westStar));

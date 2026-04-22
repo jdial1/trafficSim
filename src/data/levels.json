@@ -82,7 +82,7 @@
   {
     "id": "1D",
     "title": "1D: PROTECTED LEFTS",
-    "from": "GOSAVTOMATIKA SAFETY DIVISION <safety@bot.gov>",
+    "from": "OGAS SAFETY DIVISION <safety@bot.gov>",
     "subject": "DIRECTIVE 82-D: LEFT TURN CONFLICT",
     "body": "Collision data suggests Northbound drivers are failing to yield. Implement a dedicated Left-Turn phase to isolate them from Southbound oncoming traffic.",
     "bullets": [
@@ -200,7 +200,7 @@
   {
     "id": "3C",
     "title": "3C: THE SPLIT PHASE",
-    "from": "GOSAVTOMATIKA SAFETY DIVISION <safety@bot.gov>",
+    "from": "OGAS SAFETY DIVISION <safety@bot.gov>",
     "subject": "DIRECTIVE 84-C: HEAVY TRUCK CORRIDOR",
     "body": "Large trucks from the West are causing accidents when turning. Implement a 'Split Phase' where West goes entirely (Left, Straight, Right) followed by East.",
     "bullets": [
@@ -236,7 +236,7 @@
   {
     "id": "4B",
     "title": "4B: EMERGENCY CORRIDOR",
-    "from": "GOSAVTOMATIKA SAFETY DIVISION <safety@bot.gov>",
+    "from": "OGAS SAFETY DIVISION <safety@bot.gov>",
     "subject": "DIRECTIVE 85-B: HOSPITAL ACCESS",
     "body": "The Southbound corridor is now an emergency route. It must remain clear. Use sensors to purge Southbound queues the moment they exceed 2 vehicles.",
     "bullets": [
@@ -255,7 +255,7 @@
   {
     "id": "sandbox",
     "title": "SANDBOX",
-    "from": "GOSAVTOMATIKA ENGINEERING <eng@gosavtomatika.gov>",
+    "from": "OGAS ENGINEERING <eng@ogas.gov>",
     "subject": "SEC-082 SANDBOX (UNSCORED)",
     "body": "Freeplay environment enabled. All sensors and overrides are unlocked. Use this workspace to test traffic profiles before filing scored directives.",
     "bullets": [

@@ -1,4 +1,4 @@
-# GOSAVTOMATIKA — Traffic Control Terminal
+# OGAS — Traffic Control Terminal
 
 A high-performance traffic intersection simulator built with React and HTML5 Canvas.
 

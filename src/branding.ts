@@ -1,12 +1,12 @@
 export const BRAND = {
-  ORG: 'GOSAVTOMATIKA',
+  ORG: 'OGAS',
   PRODUCT: 'Traffic Control Terminal',
   SECTOR: 'SEC-082',
   SECTOR_NUM: '082',
-  REF_DOC: 'REF: GOS-SEC-082',
+  REF_DOC: 'REF: OGAS-SEC-082',
   MANUAL_VERSION: '4.2',
   PWA_DESCRIPTION: 'Signal-phase traffic control puzzle.',
-  SESSION_DB: 'GosAvtomatikaSession',
+  SESSION_DB: 'OgasSession',
 } as const;
 
 export const manualRibbonLabel = () =>
