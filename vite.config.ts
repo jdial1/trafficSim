@@ -6,6 +6,7 @@ import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
+  const base = mode === 'production' ? '/trafficSim/' : '/';
   return {
     plugins: [
       react(),
@@ -40,7 +41,7 @@ export default defineConfig(({mode}) => {
         },
       }),
     ],
-    base: './',
+    base,
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

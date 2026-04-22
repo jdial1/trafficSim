@@ -209,26 +209,12 @@ export const GameIntro = ({ phase, onDismissSplash, onEnterGame }: { phase: 'spl
   useEffect(() => { if (phase === 'splash' && postIndex < POST.length) { const t = setTimeout(() => setPostIndex(i => i + 1), 150 + Math.random() * 200); return () => clearTimeout(t); } }, [phase, postIndex]);
   
   const handleLogin = async () => {
-    console.log('Login attempt started');
-    console.log('Window location origin:', window.location.origin);
-    console.log('Supabase URL:', import.meta.env.VITE_SUPABASE_URL);
-    
-    const { error, data } = await supabase.auth.signInWithOAuth({ 
-      provider: 'google', 
-      options: { 
-        redirectTo: window.location.origin
-      } 
+    const redirectTo = new URL(import.meta.env.BASE_URL, window.location.origin).href;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo },
     });
-    
-    if (data) console.log('Login redirect initiated:', data);
-    if (error) {
-      console.error('Supabase Auth Error:', error);
-      console.error('Error details:', {
-        message: error.message,
-        status: error.status,
-        name: error.name
-      });
-    }
+    if (error) console.error(error);
   };
   const handleLogout = async () => {
     await supabase.auth.signOut();
