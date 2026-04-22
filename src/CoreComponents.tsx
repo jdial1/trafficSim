@@ -453,7 +453,6 @@ export const GameIntro = ({
           <div className="space-y-2">
             <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-[#8B949E]">{BRAND.ORG}</p>
             <h1 className="text-xl font-bold uppercase tracking-tight text-[#d1d5db] sm:text-2xl">{BRAND.PRODUCT}</h1>
-            <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-[#d1d5db]">System ready</p>
           </div>
         </div>
         <div className="w-full border border-[#2D333B] bg-[#12141a] bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[length:100%_4px] p-5 text-[11px] leading-relaxed">
