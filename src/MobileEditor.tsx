@@ -148,10 +148,22 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
 
   const closeSheet = () => setSheetOpen(false);
 
+  const phaseBlocksInOrder = blocks.filter(b => (b.header?.text.trim() ?? '').startsWith('phase('));
+  const hasPhaseBlocks = phaseBlocksInOrder.length > 0;
+  const defaultPhaseBlockId = hasPhaseBlocks ? phaseBlocksInOrder[phaseBlocksInOrder.length - 1].id : null;
+  const explicitPhaseSelection =
+    Boolean(selectedBlockId) &&
+    blocks.some(b => b.id === selectedBlockId && (b.header?.text.trim() ?? '').startsWith('phase('));
+  const movementTargetBlockId =
+    explicitPhaseSelection && selectedBlockId ? selectedBlockId : defaultPhaseBlockId;
+  const phaseHeaderShowsSelected = (blockId: string) =>
+    selectedBlockId === blockId || (!explicitPhaseSelection && defaultPhaseBlockId === blockId);
+
   const appendRaw = (chunk: string) => {
-    if (selectedBlockId) {
+    const insertBlockId = movementTargetBlockId ?? selectedBlockId;
+    if (insertBlockId) {
       const newBlocks = blocks.map(b => {
-        if (b.id === selectedBlockId) {
+        if (b.id === insertBlockId) {
           return { ...b, lines: [...b.lines, { id: `line-${Math.random()}`, text: chunk }] };
         }
         return b;
@@ -202,7 +214,10 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
       }
       closeSheet();
     }
-    else if (choice === 'movement') setComposerPath('movement_dir');
+    else if (choice === 'movement') {
+      if (!hasPhaseBlocks) return;
+      setComposerPath('movement_dir');
+    }
     else if (choice === 'condition') setComposerPath('if_dir');
     else if (choice === 'pedestrian') appendRaw('    EXCLUSIVE_PEDESTRIAN_PHASE.GO');
   };
@@ -250,7 +265,8 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
   const keyAction = 'bg-[#3FB950] border-[#238636] text-[#0D0F12]';
   const keyDither = "after:content-[''] after:absolute after:inset-0 after:pointer-events-none after:bg-[linear-gradient(rgba(0,0,0,0.1)_50%,transparent_50%)] after:bg-[size:100%_2px]";
 
-  const renderModule = (text: string, id: string, isHeader: boolean, block: BlockData) => {
+  const renderModule = (text: string, id: string, isHeader: boolean, block: BlockData, opts?: { groupedHeader?: boolean; groupedLine?: boolean }) => {
+    const groupedHeader = Boolean(opts?.groupedHeader);
     if (!text.trim()) return <div key={id} className="h-1" />;
     
     const isPhase = text.trim().startsWith('phase(');
@@ -258,7 +274,9 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
     const isPhaseOrConditionHeader = isHeader && (isPhase || isCondition);
     const showLineDelete = !isHeader;
     const showHeaderDelete = isPhaseOrConditionHeader;
-    const isSelected = isPhaseOrConditionHeader && selectedBlockId === block.id;
+    const isSelected =
+      isPhaseOrConditionHeader &&
+      (isCondition ? selectedBlockId === block.id : isPhase && phaseHeaderShowsSelected(block.id));
     const isActiveBlock = block.phaseIndex !== undefined && block.phaseIndex === activePhaseIndex;
     const showActiveLed = isActiveBlock && isPlaying;
 
@@ -269,24 +287,35 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
       'flex-1 min-w-0 flex items-center justify-center rounded border border-[#30363d] bg-[#161b22] text-[#8b949e] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate';
 
     if (!isHeader) {
+      const groupedLine = Boolean(opts?.groupedLine);
       const triple = parseMovementCommandLine(trimmed);
+      const rowShell = groupedLine
+        ? 'relative z-10 flex items-stretch bg-[#0d1117]'
+        : 'relative z-10 flex items-stretch border-2 border-[#2D333B] bg-[#161B22] rounded-md';
+      const innerPad = groupedLine ? 'py-2 pl-2 pr-1' : 'p-3';
+      const tripleGap = groupedLine ? 'gap-1' : 'gap-1.5';
+      const delBtnBorder = groupedLine ? 'border-l border-[#30363d]/55' : 'border-l-2 border-[#2D333B]';
+      const srcCls = groupedLine
+        ? 'flex-1 min-w-0 flex items-center justify-center rounded-sm bg-[#21262d] text-[#b1bac4] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1.5 py-1 truncate'
+        : neutralSourceClass;
+      const movCls = groupedLine
+        ? 'flex-1 min-w-0 flex items-center justify-center rounded-sm bg-[#1c2128] text-[#8b949e] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1.5 py-1 truncate'
+        : neutralMovementClass;
+      const actClsGo = groupedLine
+        ? 'flex-1 min-w-0 flex items-center justify-center rounded-sm bg-[#3FB950]/16 text-[#3FB950] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1.5 py-1 truncate'
+        : 'flex-1 min-w-0 flex items-center justify-center rounded border border-[#3FB950]/50 bg-[#3FB950]/14 text-[#3FB950] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate';
+      const actClsYield = groupedLine
+        ? 'flex-1 min-w-0 flex items-center justify-center rounded-sm bg-[#D29922]/14 text-[#E3B341] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1.5 py-1 truncate'
+        : 'flex-1 min-w-0 flex items-center justify-center rounded border border-[#D29922]/55 bg-[#D29922]/16 text-[#E3B341] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate';
       return (
-        <div key={id} className="relative mb-2 last:mb-0">
-          <div className="relative z-10 flex items-stretch border-2 border-[#2D333B] bg-[#161B22] rounded-md">
-            <div className="p-3 font-mono text-[11px] sm:text-xs flex-1 flex items-center overflow-hidden min-w-0">
+        <div key={id} className={groupedLine ? 'relative' : 'relative mb-2 last:mb-0'}>
+          <div className={rowShell}>
+            <div className={`font-mono text-[11px] sm:text-xs flex-1 flex items-center overflow-hidden min-w-0 ${innerPad}`}>
               {triple ? (
-                <div className="flex flex-1 min-w-0 gap-1.5 items-stretch" title={trimmed}>
-                  <span className={neutralSourceClass}>{triple.source}</span>
-                  <span className={neutralMovementClass}>{triple.movement}</span>
-                  <span
-                    className={`flex-1 min-w-0 flex items-center justify-center rounded border font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate ${
-                      triple.action === 'GO'
-                        ? 'border-[#3FB950]/50 bg-[#3FB950]/14 text-[#3FB950]'
-                        : 'border-[#D29922]/55 bg-[#D29922]/16 text-[#E3B341]'
-                    }`}
-                  >
-                    {triple.action}
-                  </span>
+                <div className={`flex flex-1 min-w-0 ${tripleGap} items-stretch`} title={trimmed}>
+                  <span className={srcCls}>{triple.source}</span>
+                  <span className={movCls}>{triple.movement}</span>
+                  <span className={triple.action === 'GO' ? actClsGo : actClsYield}>{triple.action}</span>
                 </div>
               ) : (
                 <span className="text-[#C9D1D9] truncate">{trimmed}</span>
@@ -301,7 +330,7 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
                   e.stopPropagation();
                   handleRemoveLine(block.id, id);
                 }}
-                className="shrink-0 w-11 min-h-[44px] flex items-center justify-center border-l-2 border-[#2D333B] bg-black/30 text-[#F85149]"
+                className={`shrink-0 w-11 min-h-[44px] flex items-center justify-center ${delBtnBorder} bg-black/20 text-[#F85149]`}
               >
                 <Trash2 size={18} strokeWidth={2.5} />
               </button>
@@ -311,9 +340,33 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
       );
     }
 
+    const headerMotionGrouped = groupedHeader
+      ? `relative z-10 flex items-stretch border-0 border-b-2 ${
+          isSelected
+            ? isCondition
+              ? 'border-b-[#D29922]/70'
+              : 'border-b-[#3FB950]/55'
+            : isCondition
+              ? 'border-b-[#D29922]/30'
+              : 'border-b-[#3FB950]/25'
+        } bg-[#161B22] rounded-t-md rounded-b-none shadow-none ${isPhaseOrConditionHeader ? 'cursor-pointer' : ''}`
+      : '';
+    const headerMotionStandalone = !groupedHeader
+      ? `relative z-10 flex items-stretch border-2 ${isSelected ? 'border-[#3FB950] shadow-[0_0_15px_rgba(63,185,80,0.4)]' : 'border-[#2D333B] shadow-[0_4px_0_rgba(26,29,35,1)]'} bg-[#161B22] rounded-md ${isPhaseOrConditionHeader ? 'cursor-pointer' : ''}`
+      : '';
+    const railBorderGrouped = groupedHeader
+      ? isSelected
+        ? isCondition
+          ? 'border-r-[#D29922]/45'
+          : 'border-r-[#3FB950]/40'
+        : 'border-r-[#2D333B]'
+      : isSelected
+        ? 'border-[#3FB950]'
+        : 'border-[#2D333B]';
+
     return (
-      <div key={id} className="relative group mb-2">
-        <div className="absolute inset-0 bg-[#F85149] flex justify-end items-center px-4 rounded-md shadow-inner">
+      <div key={id} className={`relative group ${groupedHeader ? '' : 'mb-2'}`}>
+        <div className={`absolute inset-0 bg-[#F85149] flex justify-end items-center px-4 shadow-inner ${groupedHeader ? 'rounded-t-md' : 'rounded-md'}`}>
           <Trash2 size={16} className="text-[#0D0F12]" strokeWidth={2.5} />
         </div>
         
@@ -336,15 +389,15 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
             }
           }}
           whileDrag={{ scale: 1.02, boxShadow: '0px 10px 20px rgba(0,0,0,0.5)' }}
-          className={`relative z-10 flex items-stretch border-2 ${isSelected ? 'border-[#3FB950] shadow-[0_0_15px_rgba(63,185,80,0.4)]' : 'border-[#2D333B] shadow-[0_4px_0_rgba(26,29,35,1)]'} bg-[#161B22] rounded-md ${isPhaseOrConditionHeader ? 'cursor-pointer' : ''}`}
+          className={groupedHeader ? headerMotionGrouped : headerMotionStandalone}
         >
-          <div className={`w-8 border-r-2 ${isSelected ? 'border-[#3FB950]' : 'border-[#2D333B]'} flex flex-col items-center justify-between py-2 ${isSelected ? 'bg-[#3FB950]/20' : showActiveLed ? 'bg-[#3FB950]/10' : isCondition ? 'bg-[#D29922]/10' : 'bg-black/20'}`}>
+          <div className={`w-8 border-r-2 ${railBorderGrouped} flex flex-col items-center justify-between py-2 ${isSelected ? 'bg-[#3FB950]/20' : showActiveLed ? 'bg-[#3FB950]/10' : isCondition ? 'bg-[#D29922]/10' : 'bg-black/20'}`}>
             <div className={`w-2 h-2 rounded-full ${isSelected || showActiveLed ? 'bg-[#3FB950] shadow-[0_0_12px_#3FB950] animate-pulse' : isPhase ? 'bg-[#2D333B]' : isCondition ? 'bg-[#D29922] shadow-[0_0_8px_#D29922]' : 'bg-[#2D333B]'}`} />
             <GripVertical size={14} className={isSelected ? "text-[#3FB950]" : "text-[#444c56]"} />
             <div className="w-[4px] h-[4px] rounded-full bg-[#0D0F12] shadow-inner" />
           </div>
 
-          <div className="p-3 font-mono text-[11px] sm:text-xs flex-1 flex items-center overflow-hidden min-w-0">
+          <div className={`font-mono text-[11px] sm:text-xs flex-1 flex items-center overflow-hidden min-w-0 ${groupedHeader ? 'py-2 px-2' : 'p-3'}`}>
             <span className={`truncate ${isSelected ? 'text-[#3FB950] font-bold' : showActiveLed ? 'text-[#3FB950]' : isPhase ? 'text-[#8B949E]' : isCondition ? 'text-[#D29922]' : 'text-[#C9D1D9]'}`}>
               {isPhase ? trimmed.replace(/^phase/i, 'PHASE') : trimmed}
             </span>
@@ -359,7 +412,7 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
                 e.stopPropagation();
                 handleRemoveBlock(block.id);
               }}
-              className="shrink-0 w-11 min-h-[44px] flex items-center justify-center border-l-2 border-[#2D333B] bg-black/30 text-[#F85149]"
+              className={`shrink-0 w-11 min-h-[44px] flex items-center justify-center bg-black/30 text-[#F85149] ${groupedHeader ? 'border-l border-[#30363d]/55' : 'border-l-2 border-[#2D333B]'}`}
             >
               <Trash2 size={18} strokeWidth={2.5} />
             </button>
@@ -371,13 +424,14 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
 
   const patchBayStatusLine = (() => {
     const fromPhaseHeader = (h: LineData) => h.text.trim().replace(/^phase/i, 'PHASE');
-    const selected = blocks.find(
-      b => b.id === selectedBlockId && b.header?.text.trim().startsWith('phase(')
-    );
-    if (selected?.header) return fromPhaseHeader(selected.header);
+    const primaryId = explicitPhaseSelection && selectedBlockId ? selectedBlockId : defaultPhaseBlockId;
+    if (primaryId) {
+      const b = blocks.find(x => x.id === primaryId);
+      if (b?.header?.text.trim().startsWith('phase(')) return fromPhaseHeader(b.header);
+    }
     if (activePhaseIndex !== undefined) {
       const active = blocks.find(
-        b => b.phaseIndex === activePhaseIndex && b.header?.text.trim().startsWith('phase(')
+        x => x.phaseIndex === activePhaseIndex && x.header?.text.trim().startsWith('phase(')
       );
       if (active?.header) return fromPhaseHeader(active.header);
     }
@@ -394,26 +448,61 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
             const headerTrim = block.header?.text.trim() ?? '';
             const isPhaseBlock = headerTrim.startsWith('phase(');
             const isConditionBlock = headerTrim.startsWith('if ');
-            const lineGroup =
+            const chainGrouped =
+              Boolean(block.header) && block.lines.length > 0 && (isPhaseBlock || isConditionBlock);
+            const headerSelected =
+              chainGrouped &&
+              (isConditionBlock ? selectedBlockId === block.id : isPhaseBlock && phaseHeaderShowsSelected(block.id));
+            const groupFrame = isPhaseBlock
+              ? headerSelected
+                ? 'border-[#3FB950] shadow-[0_0_15px_rgba(63,185,80,0.35)]'
+                : 'border-[#3FB950]/35'
+              : isConditionBlock
+                ? headerSelected
+                  ? 'border-[#D29922] shadow-[0_0_12px_rgba(210,153,34,0.22)]'
+                  : 'border-[#D29922]/40'
+                : '';
+            const lineCells = block.lines.map((line) =>
+              renderModule(line.text, line.id, false, block, chainGrouped ? { groupedLine: true } : undefined)
+            );
+            const nestedLineBox =
               block.header && block.lines.length > 0 ? (
-                <div
-                  className={
-                    isPhaseBlock
-                      ? 'rounded-md border border-[#3FB950]/20 bg-[#0d1117]/95 p-2'
-                      : isConditionBlock
-                        ? 'rounded-md border border-[#D29922]/25 bg-[#0d1117]/95 p-2'
-                        : 'rounded-md border border-[#2D333B] bg-[#0d1117]/95 p-2'
-                  }
-                >
-                  {block.lines.map((line) => renderModule(line.text, line.id, false, block))}
-                </div>
+                chainGrouped ? (
+                  <div className="divide-y divide-[#30363d]/45">{lineCells}</div>
+                ) : (
+                  <div
+                    className={
+                      isPhaseBlock
+                        ? 'rounded-md border border-[#3FB950]/20 bg-[#0d1117]/95 p-2'
+                        : isConditionBlock
+                          ? 'rounded-md border border-[#D29922]/25 bg-[#0d1117]/95 p-2'
+                          : 'rounded-md border border-[#2D333B] bg-[#0d1117]/95 p-2'
+                    }
+                  >
+                    {lineCells}
+                  </div>
+                )
               ) : (
-                block.lines.map((line) => renderModule(line.text, line.id, false, block))
+                lineCells
               );
             return (
-              <Reorder.Item key={block.id} value={block} id={block.id} className="relative flex flex-col gap-2">
-                {block.header && renderModule(block.header.text, block.header.id, true, block)}
-                {lineGroup}
+              <Reorder.Item
+                key={block.id}
+                value={block}
+                id={block.id}
+                className={`relative flex flex-col ${chainGrouped ? '' : 'gap-2'}`}
+              >
+                {chainGrouped ? (
+                  <div className={`flex flex-col overflow-hidden rounded-md border-2 bg-[#0d1117] ${groupFrame}`}>
+                    {renderModule(block.header!.text, block.header!.id, true, block, { groupedHeader: true })}
+                    {nestedLineBox}
+                  </div>
+                ) : (
+                  <>
+                    {block.header && renderModule(block.header.text, block.header.id, true, block)}
+                    {nestedLineBox}
+                  </>
+                )}
               </Reorder.Item>
             );
           })}
@@ -451,7 +540,14 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
               {composerPath === 'root' && (
                 <div className="grid grid-cols-2 gap-3">
                   <button onClick={() => handleRootChoice('phase')} className={`${keyBase} ${keyNeutral}`}>[ TRIGGER: PHASE ]</button>
-                  <button onClick={() => handleRootChoice('movement')} className={`${keyBase} ${keyAction} ${keyDither}`}>[ ROUTE: MOVEMENT ]</button>
+                  <button
+                    type="button"
+                    onClick={() => handleRootChoice('movement')}
+                    disabled={!hasPhaseBlocks}
+                    className={`${keyBase} ${hasPhaseBlocks ? `${keyAction} ${keyDither}` : `${keyNeutral} pointer-events-none opacity-50`}`}
+                  >
+                    [ ROUTE: MOVEMENT ]
+                  </button>
                   <button onClick={() => handleRootChoice('condition')} className={`${keyBase} ${keyNeutral} ${keyDither} pointer-events-none opacity-50`}>[ SENSOR: IF_QUEUE ]</button>
                   <button onClick={() => handleRootChoice('pedestrian')} className={`${keyBase} ${keyNeutral} ${keyDither} pointer-events-none opacity-50`}>[ ROUTE: PEDESTRIAN ]</button>
                 </div>
