@@ -6,20 +6,22 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Save, Plus, Minus, Trash2, Download, Mail, Terminal, Map as MapIcon } from 'lucide-react';
-import Editor, { useMonaco } from '@monaco-editor/react';
 import { Movement, Vehicle, Lane, LightState, MovementTiming, VehicleType, LogEntry, HistoryEntry, QueueHistoryEntry, BriefingContent, level1Briefing } from './types';
 import { parseTrafficProgram, Phase, ConditionalRule, PhaseCommand, KEYWORD_MAP } from './interpreter';
 import { PRNG } from './utils/prng';
 import { LevelManager } from './LevelManager';
 import { CANVAS_SIZE, INTERSECTION_SIZE, LANE_WIDTH, LANES, DEFAULT_TIMINGS, DEFAULT_PHASE_GREEN_SECONDS, DEFAULT_BUILTIN_PHASE_TIMINGS, BASE_SPAWN_RATE, SPAWN_DRIFT_SPEED, MIN_PHASE_GREEN_SECONDS, MAX_TOTAL_LOOP_SECONDS, clampPhaseTimingsToLoopCap, SIDEBAR_DEFAULT_WIDTH, ZOOM_STEP, MOBILE_SPLIT_HANDLE_PX, MOBILE_COLLAPSED_STRIP_PX, MOBILE_SPLIT_MAX_RATIO, HEAT_GRID_COLS, HEAT_GRID_ROWS, LOOP_LAG_LOG_MS, LOOP_HUD_MIN_INTERVAL_MS, MAX_SIM_INTEGRATION_STEP, LEGENDARY_SPAWN_CHANCE, LANE_MAP, LEFT_LANE_IDS, ADJACENT_RIGHT_MERGE_PAIR_KEYS, ADJACENT_LEFT_MERGE_PAIR_KEYS, STOP_LINE, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, HEATMAP_DECAY, HEATMAP_GAIN, HEATMAP_MAX, SKID_MARK_BRAKE_THRESHOLD, SKID_MARK_TTL_MS, MAX_SKID_MARK_SEGMENTS, BASE_SAFE_GAP, VEHICLE_COLORS } from './constants';
 import { useGlobalState } from './GlobalStateContext';
-import { loadSession, saveSession, narrowViewport, defaultZoom, MovementLabels, DIRECTIONS, getDirection, getMovementIcon, formatActiveMovements, hapticCrash, hapticHeavy, hapticError, playThunk, startAtmosphericHum, stopAtmosphericHum } from './traffic';
-import { IntersectionEngine, CrashInfo, RearTires, pickVehicleAtCanvasPoint, getPathEndPoint, renderVehicleSprite, getPathGeometry, getRearTirePositions } from './IntersectionEngine';
+import { loadSession, saveSession, narrowViewport, defaultZoom, MovementLabels, DIRECTIONS, getDirection, getMovementIcon, formatActiveMovements, hapticCrash, hapticHeavy, hapticError, playThunk, startAtmosphericHum, stopAtmosphericHum, type TimeScale } from './traffic';
+import { IntersectionEngine, CrashInfo, RearTires, SkidMarkSegment, pickVehicleAtCanvasPoint, getPathEndPoint, renderVehicleSprite, getPathGeometry, getRearTirePositions } from './IntersectionEngine';
+import { clearPwaInstallDeferred, getPwaInstallDeferred, subscribePwaInstall, type PwaInstallPromptEvent } from './pwaInstallPrompt';
 import { Histogram, ManualOverlay, LevelSelect, GameIntro, FirmwareUpdatePrompt } from './CoreComponents';
 import vehicleCatalog from './data/vehicles.json';
 
+let sysBootLogged = false;
+
 export function useTrafficSimulation() {
-  const { unlockedLevels, unlockLevel, saveSolution, saveHighscore, highscores } = useGlobalState();
+  const { unlockedLevels, unlockLevel, saveSolution, saveHighscore } = useGlobalState();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const prngRef = useRef<PRNG>(new PRNG(42));
   const simMainRef = useRef<HTMLElement | null>(null);
@@ -46,7 +48,7 @@ export function useTrafficSimulation() {
   const [isAdaptive, setIsAdaptive] = useState(true);
   
   // UI State
-  const [introPhase, setIntroPhase] = useState<'splash' | 'home' | null>('splash');
+  const [introPhase, setIntroPhase] = useState<'landing' | null>('landing');
   const [mobileScreen, setMobileScreen] = useState<'briefing' | 'logic' | 'metrics'>('briefing');
   const mobileScreenRef = useRef(mobileScreen);
   mobileScreenRef.current = mobileScreen;
@@ -61,25 +63,25 @@ export function useTrafficSimulation() {
   const [sessionCrashes, setSessionCrashes] = useState(0);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [sessionTime, setSessionTime] = useState(0);
+  const sessionCarsClearedRef = useRef(0);
+  const sessionCarsByDirRef = useRef({ N: 0, S: 0, E: 0, W: 0 });
+  const sessionTimeRef = useRef(0);
+  const directiveWonRef = useRef(false);
   const [activeLevelId, setActiveLevelId] = useState('1A');
   const currentLevel = useMemo(() => level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0], [activeLevelId]);
 
   const editorRef = useRef<any>(null);
   const decorationsRef = useRef<any[]>([]);
+  const [monaco, setMonaco] = useState<any>(null);
 
-  const handleEditorDidMount = (editor: any, monaco: any) => {
+  const handleEditorDidMount = useCallback((editor: any, monacoNs: any) => {
     editorRef.current = editor;
-  };
+    setMonaco(monacoNs);
+  }, []);
 
   useEffect(() => {
-    let interval: number;
-    if (isPlaying) {
-      interval = window.setInterval(() => {
-        setSessionTime(prev => prev + 1);
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isPlaying]);
+    sessionTimeRef.current = sessionTime;
+  }, [sessionTime]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -92,12 +94,6 @@ export function useTrafficSimulation() {
       window.removeEventListener('orientationchange', handleResize);
     };
   }, []);
-
-  useEffect(() => {
-    if (introPhase !== 'splash') return;
-    const t = window.setTimeout(() => setIntroPhase('home'), 2600);
-    return () => clearTimeout(t);
-  }, [introPhase]);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => narrowViewport());
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
@@ -229,25 +225,18 @@ export function useTrafficSimulation() {
     hardwareCost: number;
   } | null>(null);
   const [isManualOpen, setIsManualOpen] = useState(false);
-  const [installDeferred, setInstallDeferred] = useState<BeforeInstallPromptEventExtended | null>(null);
+  const [installDeferred, setInstallDeferred] = useState<PwaInstallPromptEvent | null>(() =>
+    typeof window !== 'undefined' ? getPwaInstallDeferred() : null,
+  );
   const [isStandaloneDisplay, setIsStandaloneDisplay] = useState(false);
+
+  useEffect(() => subscribePwaInstall(() => setInstallDeferred(getPwaInstallDeferred())), []);
 
   useEffect(() => {
     setIsStandaloneDisplay(
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as Navigator & { standalone?: boolean }).standalone === true,
     );
-    const onBeforeInstall = (e: Event) => {
-      e.preventDefault();
-      setInstallDeferred(e as BeforeInstallPromptEventExtended);
-    };
-    const onAppInstalled = () => setInstallDeferred(null);
-    window.addEventListener('beforeinstallprompt', onBeforeInstall);
-    window.addEventListener('appinstalled', onAppInstalled);
-    return () => {
-      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
-      window.removeEventListener('appinstalled', onAppInstalled);
-    };
   }, []);
 
   // Store accumulated demand per phase over the current cycle
@@ -283,7 +272,6 @@ export function useTrafficSimulation() {
   const [cmdDir, setCmdDir] = useState<string>('');
   const [cmdTurn, setCmdTurn] = useState<string>('');
 
-  const monaco = useMonaco();
   useEffect(() => {
     if (!editorRef.current || !monaco) return;
     const phase = compiledPhases[currentPhase];
@@ -465,6 +453,16 @@ export function useTrafficSimulation() {
     timeScaleRef.current = timeScale;
   }, [timeScale]);
 
+  useEffect(() => {
+    let interval: number;
+    if (isPlaying) {
+      interval = window.setInterval(() => {
+        setSessionTime((prev) => prev + 1);
+      }, 1000 / timeScale);
+    }
+    return () => clearInterval(interval);
+  }, [isPlaying, timeScale]);
+
   const addLog = useCallback((event: string, color?: string) => {
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     console.log(`[phase] ${time} ${event}`);
@@ -559,10 +557,11 @@ export function useTrafficSimulation() {
     return null;
   }, []);
 
-  // Initial boot log
   useEffect(() => {
+    if (sysBootLogged) return;
+    sysBootLogged = true;
     addLog('SYS BOOT OK', 'var(--green)');
-  }, []);
+  }, [addLog]);
 
   useEffect(() => {
     const toggleLegendarySpawnTest = () => {
@@ -1225,13 +1224,15 @@ export function useTrafficSimulation() {
     }
     vehicles.length = validCount;
     if (newlyCleared > 0) {
-      setSessionCarsCleared(prev => prev + newlyCleared);
-      setSessionCarsByDir(prev => ({
-        N: prev.N + newlyClearedDirs.N,
-        S: prev.S + newlyClearedDirs.S,
-        E: prev.E + newlyClearedDirs.E,
-        W: prev.W + newlyClearedDirs.W,
-      }));
+      sessionCarsClearedRef.current += newlyCleared;
+      sessionCarsByDirRef.current = {
+        N: sessionCarsByDirRef.current.N + newlyClearedDirs.N,
+        S: sessionCarsByDirRef.current.S + newlyClearedDirs.S,
+        E: sessionCarsByDirRef.current.E + newlyClearedDirs.E,
+        W: sessionCarsByDirRef.current.W + newlyClearedDirs.W,
+      };
+      setSessionCarsCleared(sessionCarsClearedRef.current);
+      setSessionCarsByDir({ ...sessionCarsByDirRef.current });
     }
     const filteredRearTires: Record<string, RearTires> = {};
     for (let i = 0; i < vehicles.length; i++) {
@@ -1259,8 +1260,74 @@ export function useTrafficSimulation() {
         hapticCrash();
       }
     }
+    if (
+      newlyCleared > 0 &&
+      !crashDetectedRef.current &&
+      !directiveWonRef.current &&
+      !isFreeplay &&
+      currentLevel.winCondition.clearCars > 0 &&
+      !currentLevel.isSandbox
+    ) {
+      const wc = currentLevel.winCondition;
+      const byDir = sessionCarsByDirRef.current;
+      const cleared = sessionCarsClearedRef.current;
+      const minReq = wc.minPerDirection;
+      const dirs: ('N' | 'S' | 'E' | 'W')[] = ['N', 'S', 'E', 'W'];
+      const minOk =
+        minReq == null ||
+        dirs.every((d) => {
+          const prefix = d === 'N' ? 'nb-' : d === 'S' ? 'sb-' : d === 'E' ? 'eb-' : 'wb-';
+          const closed = currentLevel.closedLanes;
+          const spawnOff = closed?.some((id) => id.startsWith(prefix)) ?? false;
+          return spawnOff || byDir[d] >= minReq;
+        });
+      if (cleared >= wc.clearCars && minOk) {
+        directiveWonRef.current = true;
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+        const phaseCount = compiledPhases.length > 0 ? compiledPhases.length : 4;
+        let phaseSum = 0;
+        for (let i = 0; i < phaseCount; i++) {
+          phaseSum += phaseTimings[i] ?? DEFAULT_PHASE_GREEN_SECONDS;
+        }
+        const linesOfCode = programCode.split('\n').filter((l) => l.trim() !== '').length;
+        const hwJoined = (currentLevel.hardware ?? []).join('');
+        const hardwareCost = Math.min(2000, Math.max(100, hwJoined.length * 8 + phaseCount * 110));
+        const wallSecs = Math.max(1, sessionTimeRef.current);
+        saveHighscore(activeLevelId, {
+          secondsToClear: wallSecs,
+          instructionCount: linesOfCode,
+          hardwareCost,
+        });
+        saveSolution(activeLevelId, programCode);
+        if (currentLevel.nextLevelId) {
+          unlockLevel(currentLevel.nextLevelId);
+        }
+        setLevelCompleteInfo({
+          carsCleared: cleared,
+          timeSeconds: wallSecs,
+          cycleTime: phaseSum,
+          linesOfCode,
+          hardwareCost,
+        });
+      }
+    }
     u.cullSkid = performance.now() - m;
-  }, [activeMovements, lightState, addLog, detectCrash]);
+  }, [
+    activeMovements,
+    lightState,
+    addLog,
+    detectCrash,
+    isFreeplay,
+    currentLevel,
+    activeLevelId,
+    compiledPhases,
+    phaseTimings,
+    programCode,
+    saveHighscore,
+    saveSolution,
+    unlockLevel,
+  ]);
 
   const draw = useCallback((ctx: CanvasRenderingContext2D, time: number) => {
     const d = loopDrawSectionsRef.current;
@@ -1861,11 +1928,12 @@ export function useTrafficSimulation() {
     triggerRedraw();
   }, [zoom, pan, programCode, mobileScreen, isEditMode, currentPhase, triggerRedraw]);
 
-  const dismissIntroSplash = useCallback(() => {
-    hapticHeavy();
-    playThunk();
-    startAtmosphericHum();
-    setIntroPhase('home');
+  const triggerPwaInstall = useCallback(async () => {
+    const ev = getPwaInstallDeferred();
+    if (!ev) return;
+    await ev.prompt();
+    await ev.userChoice;
+    clearPwaInstallDeferred();
   }, []);
 
   const enterGameFromIntro = useCallback(() => {
@@ -1877,7 +1945,7 @@ export function useTrafficSimulation() {
   }, []);
 
   const returnToMainMenu = useCallback(() => {
-    setIntroPhase('home');
+    setIntroPhase('landing');
     isPlayingRef.current = false;
     setIsPlaying(false);
     setExecutionSplitActive(false);
@@ -2064,6 +2132,17 @@ export function useTrafficSimulation() {
     return { title: '', body: '' };
   }, [programCode, userTemplate]);
 
+  const resetDirectiveRunProgress = useCallback(() => {
+    sessionCarsClearedRef.current = 0;
+    sessionCarsByDirRef.current = { N: 0, S: 0, E: 0, W: 0 };
+    sessionTimeRef.current = 0;
+    directiveWonRef.current = false;
+    setSessionCarsCleared(0);
+    setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
+    setSessionCrashes(0);
+    setSessionTime(0);
+  }, []);
+
   const resetSimulation = useCallback((reason: 'MANUAL' | 'CRASH', autoPlay: boolean = false) => {
     prngRef.current = new PRNG(currentLevel?.randomSeed ?? Date.now());
     vehiclesRef.current = [];
@@ -2076,10 +2155,7 @@ export function useTrafficSimulation() {
     setIsFreeplay(false);
     setIsCrashModalMinimized(false);
     setOffScreenQueues({});
-    setSessionCarsCleared(0);
-    setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
-    setSessionCrashes(0);
-    setSessionTime(0);
+    resetDirectiveRunProgress();
     setInjectedPhase(null);
     skipConditionalAfterInjectRef.current = false;
     setCurrentPhase(0);
@@ -2091,7 +2167,7 @@ export function useTrafficSimulation() {
     setIsPlaying(autoPlay);
     triggerRedraw();
     addLog(reason === 'CRASH' ? 'CRASH RESET' : 'MANUAL RESET', reason === 'CRASH' ? 'var(--red)' : 'var(--minor)');
-  }, [addLog, triggerRedraw, currentLevel]);
+  }, [addLog, triggerRedraw, currentLevel, resetDirectiveRunProgress]);
 
   const handleSelectLevel = useCallback((levelId: string) => {
     setActiveLevelId(levelId);
@@ -2147,9 +2223,9 @@ export function useTrafficSimulation() {
     vehiclesRef, forceRareSpawnRef, forceLegendarySpawnRef, laneCarsCacheRef, skidMarksRef,
     previousRearTiresRef, requestRef, lastTimeRef, crashDetectedRef, loopUpdateSectionsRef,
     loopDrawSectionsRef, loopTotalMsWindowRef, loopHudThrottleRef, bgFontsReady, setBgFontsReady,
-    heatMapRef, addLog, resetSimulation, handleSelectLevel, applyTemplate, detectCrash,
+    heatMapRef, addLog, resetSimulation, resetDirectiveRunProgress, handleSelectLevel, applyTemplate, detectCrash,
     yieldMovements, activeMovements, update, draw, loop, triggerRedraw, handlePhaseTimingChange,
-    getPercentage, toggleCollapsed, togglePlayback, dismissIntroSplash, enterGameFromIntro, returnToMainMenu,
+    getPercentage, toggleCollapsed, togglePlayback, triggerPwaInstall, enterGameFromIntro, returnToMainMenu,
     handleCanvasWheel, handleCanvasPointerDown, handleCanvasPointerMove, handleCanvasPointerUp, startSidebarResize,
     phaseRowCount, cycleLength, sidebarColumnWidth, engineeringTemplateBlurb
   };

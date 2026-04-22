@@ -1,6 +1,6 @@
 {
-  "name": "Ring & Barrier Traffic Sim",
-  "description": "A top-down traffic simulator featuring standard 8-phase Ring and Barrier controller logic with adjustable timings.",
+  "name": "GOSAVTOMATIKA — Traffic Control Terminal",
+  "description": "Signal-phase traffic control puzzle: author phases, monitor queues, clear directives at SEC-082.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

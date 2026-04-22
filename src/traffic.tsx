@@ -1,5 +1,6 @@
 import React from 'react';
 import { Activity, ArrowUp, CornerUpLeft, CornerUpRight } from 'lucide-react';
+import { BRAND } from './branding';
 import { Movement } from './types';
 
 export const VIEWPORT_MOBILE_MAX_WIDTH = 767;
@@ -34,7 +35,14 @@ export const TIME_SCALE_OPTIONS = [1, 2, 5, 10] as const;
 export type TimeScale = (typeof TIME_SCALE_OPTIONS)[number];
 
 // Haptics & Audio
-export const vibrate = (p: number | number[]) => { if (typeof window !== 'undefined' && 'navigator' in window && navigator.vibrate) try { navigator.vibrate(p); } catch {} };
+export const vibrate = (p: number | number[]) => {
+  if (typeof window === 'undefined' || !navigator.vibrate) return;
+  const ua = (navigator as Navigator & { userActivation?: UserActivation }).userActivation;
+  if (ua && !ua.isActive) return;
+  try {
+    navigator.vibrate(p);
+  } catch {}
+};
 export const hapticTap = () => vibrate(10);
 export const hapticDrag = () => vibrate(5);
 export const hapticHeavy = () => vibrate([30, 50, 30]);
@@ -42,8 +50,7 @@ export const hapticError = () => vibrate([80, 50, 80]);
 export const hapticCrash = () => vibrate([50, 100, 50, 100, 200, 50, 300]);
 export const playThunk = () => {}; export const startAtmosphericHum = () => {}; export const stopAtmosphericHum = () => {};
 
-// IndexedDB Session Persistence
-const DB_NAME = 'GosAvtomatikaSession';
+const DB_NAME = BRAND.SESSION_DB;
 const STORE_NAME = 'sessionData';
 const openDB = (): Promise<IDBDatabase> => new Promise((res, rej) => {
   const req = indexedDB.open(DB_NAME, 1);

@@ -1,3 +1,4 @@
+import { BRAND } from './branding';
 import { Movement } from './types';
 import keywordData from './data/keywords.json';
 
@@ -192,7 +193,7 @@ export function parseTrafficProgram(code: string, constraints?: HardwareConstrai
       return { phases: [], rules: [], error: `ERR_HW_LIMIT_EXCEEDED: Maximum of ${constraints.maxPhases} phases allowed.` };
     }
     if (constraints.noConditionals && rules.length > 0) {
-      return { phases: [], rules: [], error: `ERR_HW_LIMIT_EXCEEDED: Sec-082 Node does not support conditional routing.` };
+      return { phases: [], rules: [], error: `ERR_HW_LIMIT_EXCEEDED: ${BRAND.SECTOR} node does not support conditional routing.` };
     }
   }
 

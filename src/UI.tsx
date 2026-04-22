@@ -1,4 +1,5 @@
 import React from 'react';
+import { METRIC } from './branding';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronDown, ChevronRight, AlertTriangle, RotateCcw, Pause, Play } from 'lucide-react';
 import { Vehicle, Movement, LogEntry } from './types';
@@ -184,9 +185,9 @@ export const LevelCompleteModal = ({ info, levelId, isLastLevel, onNext, onRetry
       <div className="p-6">
         <h2 className="text-[#C9D1D9] text-xl font-bold mb-6 text-center tracking-wider">PERFORMANCE METRICS</h2>
         <div className="space-y-2">
-          <Histogram title="THROUGHPUT" value={info.cycleTime} unit="s" color="#3FB950" min={10} max={120} levelId={levelId} dbColumn="seconds_to_clear" />
-          <Histogram title="INSTRUCTION COUNT" value={info.linesOfCode} unit=" LINES" color="#58A6FF" min={2} max={30} levelId={levelId} dbColumn="instruction_count" />
-          <Histogram title="HARDWARE COST" value={info.hardwareCost} unit=" ¥" color="#D29922" min={100} max={2000} levelId={levelId} dbColumn="hardware_cost" />
+          <Histogram title={METRIC.THROUGHPUT} value={info.cycleTime} unit="s" color="#3FB950" min={10} max={120} levelId={levelId} dbColumn="seconds_to_clear" />
+          <Histogram title={METRIC.INSTRUCTION_COUNT} value={info.linesOfCode} unit="LINES" color="#58A6FF" min={2} max={30} levelId={levelId} dbColumn="instruction_count" />
+          <Histogram title={METRIC.HARDWARE_COST} value={info.hardwareCost} unit="¥" color="#D29922" min={100} max={2000} levelId={levelId} dbColumn="hardware_cost" />
         </div>
         <div className="mt-8 flex gap-3">
           <button onClick={onRetry} className="flex-1 border border-[#2D333B] bg-black/20 py-2 text-[#C9D1D9] hover:bg-white/5 hover:text-white transition-colors">OPTIMIZE</button>

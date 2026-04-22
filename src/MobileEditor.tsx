@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
-import { ChevronDown, Plus, Trash2, GripVertical, Cpu } from 'lucide-react';
+import { ChevronDown, Trash2, GripVertical, Cpu } from 'lucide-react';
 import { hapticTap } from './traffic';
 
 type Dir = 'NORTH' | 'SOUTH' | 'EAST' | 'WEST';
@@ -24,6 +24,21 @@ type BlockData = {
   lines: LineData[];
   phaseIndex?: number;
 };
+
+type MovementTriple = { source: string; movement: string; action: 'GO' | 'YIELD' };
+
+function parseMovementCommandLine(trimmed: string): MovementTriple | null {
+  const m = trimmed.match(/^(.+)\.(GO|YIELD)$/i);
+  if (!m) return null;
+  const base = m[1].trim();
+  const u = base.indexOf('_');
+  if (u < 0) return null;
+  return {
+    source: base.slice(0, u).toUpperCase(),
+    movement: base.slice(u + 1).toUpperCase(),
+    action: m[2].toUpperCase() as 'GO' | 'YIELD',
+  };
+}
 
 export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteLastLine, activePhaseIndex, closedLanes, isPlaying }: Props) {
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -230,9 +245,9 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
     else if (composerPath === 'insert_action') appendRaw(`${builderBase}.${action})`);
   };
 
-  const keyBase = 'relative min-h-[48px] px-2 py-2 rounded-sm font-mono text-[12px] font-bold tracking-widest border-b-4 active:border-b-0 active:translate-y-1 transition-all flex items-center justify-center overflow-hidden';
-  const keyNeutral = 'bg-[#2D333B] border-[#1A1D23] text-[#C9D1D9] hover:bg-[#3e4550]';
-  const keyAction = 'bg-[#3FB950] border-[#238636] text-[#0D0F12] shadow-[0_0_15px_rgba(63,185,80,0.2)]';
+  const keyBase = 'relative min-h-[48px] px-2 py-2 rounded-sm font-mono text-[12px] font-bold tracking-widest border-2 flex items-center justify-center overflow-hidden';
+  const keyNeutral = 'bg-[#2D333B] border-[#1A1D23] text-[#C9D1D9]';
+  const keyAction = 'bg-[#3FB950] border-[#238636] text-[#0D0F12]';
   const keyDither = "after:content-[''] after:absolute after:inset-0 after:pointer-events-none after:bg-[linear-gradient(rgba(0,0,0,0.1)_50%,transparent_50%)] after:bg-[size:100%_2px]";
 
   const renderModule = (text: string, id: string, isHeader: boolean, block: BlockData) => {
@@ -240,80 +255,168 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
     
     const isPhase = text.trim().startsWith('phase(');
     const isCondition = text.trim().startsWith('if ');
-    const isSelected = isHeader && (isPhase || isCondition) && selectedBlockId === block.id;
+    const isPhaseOrConditionHeader = isHeader && (isPhase || isCondition);
+    const showLineDelete = !isHeader;
+    const showHeaderDelete = isPhaseOrConditionHeader;
+    const isSelected = isPhaseOrConditionHeader && selectedBlockId === block.id;
     const isActiveBlock = block.phaseIndex !== undefined && block.phaseIndex === activePhaseIndex;
     const showActiveLed = isActiveBlock && isPlaying;
-    
-    const activeColor = '#3FB950'; // Green for active phase
-    const inactiveColor = '#2D333B';
-    const phaseColor = '#3FB950';
-    const conditionColor = '#D29922';
-    
+
+    const trimmed = text.trim();
+    const neutralSourceClass =
+      'flex-1 min-w-0 flex items-center justify-center rounded border border-[#3d444d] bg-[#1a1f26] text-[#b1bac4] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate';
+    const neutralMovementClass =
+      'flex-1 min-w-0 flex items-center justify-center rounded border border-[#30363d] bg-[#161b22] text-[#8b949e] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate';
+
+    if (!isHeader) {
+      const triple = parseMovementCommandLine(trimmed);
+      return (
+        <div key={id} className="relative mb-2 last:mb-0">
+          <div className="relative z-10 flex items-stretch border-2 border-[#2D333B] bg-[#161B22] rounded-md">
+            <div className="p-3 font-mono text-[11px] sm:text-xs flex-1 flex items-center overflow-hidden min-w-0">
+              {triple ? (
+                <div className="flex flex-1 min-w-0 gap-1.5 items-stretch" title={trimmed}>
+                  <span className={neutralSourceClass}>{triple.source}</span>
+                  <span className={neutralMovementClass}>{triple.movement}</span>
+                  <span
+                    className={`flex-1 min-w-0 flex items-center justify-center rounded border font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate ${
+                      triple.action === 'GO'
+                        ? 'border-[#3FB950]/50 bg-[#3FB950]/14 text-[#3FB950]'
+                        : 'border-[#D29922]/55 bg-[#D29922]/16 text-[#E3B341]'
+                    }`}
+                  >
+                    {triple.action}
+                  </span>
+                </div>
+              ) : (
+                <span className="text-[#C9D1D9] truncate">{trimmed}</span>
+              )}
+            </div>
+            {showLineDelete && (
+              <button
+                type="button"
+                aria-label="Delete command"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRemoveLine(block.id, id);
+                }}
+                className="shrink-0 w-11 min-h-[44px] flex items-center justify-center border-l-2 border-[#2D333B] bg-black/30 text-[#F85149]"
+              >
+                <Trash2 size={18} strokeWidth={2.5} />
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <div key={id} className={`relative group ${!isHeader && block.header ? 'ml-6' : ''} mb-2`}>
-        {/* Delete Background Reveal */}
+      <div key={id} className="relative group mb-2">
         <div className="absolute inset-0 bg-[#F85149] flex justify-end items-center px-4 rounded-md shadow-inner">
           <Trash2 size={16} className="text-[#0D0F12]" strokeWidth={2.5} />
         </div>
         
-        {/* Physical Module Block */}
         <motion.div
           drag="x"
           dragConstraints={{ left: 0, right: 0 }}
           dragElastic={0.2}
           onDragStart={(e) => {
-            // Prevent triggering the vertical reorder drag when dragging to delete
             e.stopPropagation();
           }}
           onDragEnd={(e, info) => { 
-            if (info.offset.x < -60) {
-              if (isHeader) handleRemoveBlock(block.id);
-              else handleRemoveLine(block.id, id);
+            if (info.offset.x < -60 && showHeaderDelete) {
+              handleRemoveBlock(block.id);
             }
           }}
           onClick={() => {
-            if (isHeader && (isPhase || isCondition)) {
+            if (isPhaseOrConditionHeader) {
               hapticTap();
               setSelectedBlockId(prev => prev === block.id ? null : block.id);
             }
           }}
           whileDrag={{ scale: 1.02, boxShadow: '0px 10px 20px rgba(0,0,0,0.5)' }}
-          className={`relative z-10 flex items-stretch border-2 ${isSelected ? 'border-[#3FB950] shadow-[0_0_15px_rgba(63,185,80,0.4)]' : 'border-[#2D333B] shadow-[0_4px_0_rgba(26,29,35,1)]'} bg-[#161B22] rounded-md hover:translate-y-[2px] transition-all ${isHeader && (isPhase || isCondition) ? 'cursor-pointer' : ''}`}
+          className={`relative z-10 flex items-stretch border-2 ${isSelected ? 'border-[#3FB950] shadow-[0_0_15px_rgba(63,185,80,0.4)]' : 'border-[#2D333B] shadow-[0_4px_0_rgba(26,29,35,1)]'} bg-[#161B22] rounded-md ${isPhaseOrConditionHeader ? 'cursor-pointer' : ''}`}
         >
-          {/* Grip / Status LED */}
           <div className={`w-8 border-r-2 ${isSelected ? 'border-[#3FB950]' : 'border-[#2D333B]'} flex flex-col items-center justify-between py-2 ${isSelected ? 'bg-[#3FB950]/20' : showActiveLed ? 'bg-[#3FB950]/10' : isCondition ? 'bg-[#D29922]/10' : 'bg-black/20'}`}>
             <div className={`w-2 h-2 rounded-full ${isSelected || showActiveLed ? 'bg-[#3FB950] shadow-[0_0_12px_#3FB950] animate-pulse' : isPhase ? 'bg-[#2D333B]' : isCondition ? 'bg-[#D29922] shadow-[0_0_8px_#D29922]' : 'bg-[#2D333B]'}`} />
             <GripVertical size={14} className={isSelected ? "text-[#3FB950]" : "text-[#444c56]"} />
-            <div className="w-[4px] h-[4px] rounded-full bg-[#0D0F12] shadow-inner" /> {/* Fake Screw */}
+            <div className="w-[4px] h-[4px] rounded-full bg-[#0D0F12] shadow-inner" />
           </div>
 
-          {/* Code Screen */}
-          <div className="p-3 font-mono text-[11px] sm:text-xs flex-1 flex items-center justify-between overflow-hidden">
+          <div className="p-3 font-mono text-[11px] sm:text-xs flex-1 flex items-center overflow-hidden min-w-0">
             <span className={`truncate ${isSelected ? 'text-[#3FB950] font-bold' : showActiveLed ? 'text-[#3FB950]' : isPhase ? 'text-[#8B949E]' : isCondition ? 'text-[#D29922]' : 'text-[#C9D1D9]'}`}>
-              {text.trim()}
+              {isPhase ? trimmed.replace(/^phase/i, 'PHASE') : trimmed}
             </span>
-            <div className="shrink-0 ml-2 flex items-center gap-1">
-              {text.includes('.GO') && <span className="text-[9px] bg-[#3FB950]/20 text-[#3FB950] px-1 rounded border border-[#3FB950]/40">ACTV</span>}
-              {text.includes('.YIELD') && <span className="text-[9px] bg-[#D29922]/20 text-[#D29922] px-1 rounded border border-[#D29922]/40">YLD</span>}
-            </div>
           </div>
+
+          {showHeaderDelete && (
+            <button
+              type="button"
+              aria-label="Delete phase or block"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRemoveBlock(block.id);
+              }}
+              className="shrink-0 w-11 min-h-[44px] flex items-center justify-center border-l-2 border-[#2D333B] bg-black/30 text-[#F85149]"
+            >
+              <Trash2 size={18} strokeWidth={2.5} />
+            </button>
+          )}
         </motion.div>
       </div>
     );
   };
 
+  const patchBayStatusLine = (() => {
+    const fromPhaseHeader = (h: LineData) => h.text.trim().replace(/^phase/i, 'PHASE');
+    const selected = blocks.find(
+      b => b.id === selectedBlockId && b.header?.text.trim().startsWith('phase(')
+    );
+    if (selected?.header) return fromPhaseHeader(selected.header);
+    if (activePhaseIndex !== undefined) {
+      const active = blocks.find(
+        b => b.phaseIndex === activePhaseIndex && b.header?.text.trim().startsWith('phase(')
+      );
+      if (active?.header) return fromPhaseHeader(active.header);
+    }
+    return 'PATCH BAY ACTIVE';
+  })();
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden gap-3 bg-[#0D0F12] p-2 rounded border border-[#2D333B] shadow-inner crt-bezel">
       
       {/* Hardware Logic Board */}
-      <div className="flex-1 overflow-y-auto scrollbar-hide bg-[linear-gradient(#1A1D23_1px,transparent_1px),linear-gradient(90deg,#1A1D23_1px,transparent_1px)] bg-[size:16px_16px]">
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-editor-touch bg-[linear-gradient(#1A1D23_1px,transparent_1px),linear-gradient(90deg,#1A1D23_1px,transparent_1px)] bg-[size:16px_16px]">
         <Reorder.Group axis="y" values={blocks} onReorder={handleReorderBlocks} className="flex flex-col gap-2 min-h-full p-2">
-          {blocks.map((block) => (
-            <Reorder.Item key={block.id} value={block} id={block.id} className="relative flex flex-col">
-              {block.header && renderModule(block.header.text, block.header.id, true, block)}
-              {block.lines.map(line => renderModule(line.text, line.id, false, block))}
-            </Reorder.Item>
-          ))}
+          {blocks.map((block) => {
+            const headerTrim = block.header?.text.trim() ?? '';
+            const isPhaseBlock = headerTrim.startsWith('phase(');
+            const isConditionBlock = headerTrim.startsWith('if ');
+            const lineGroup =
+              block.header && block.lines.length > 0 ? (
+                <div
+                  className={
+                    isPhaseBlock
+                      ? 'rounded-md border border-[#3FB950]/20 bg-[#0d1117]/95 p-2'
+                      : isConditionBlock
+                        ? 'rounded-md border border-[#D29922]/25 bg-[#0d1117]/95 p-2'
+                        : 'rounded-md border border-[#2D333B] bg-[#0d1117]/95 p-2'
+                  }
+                >
+                  {block.lines.map((line) => renderModule(line.text, line.id, false, block))}
+                </div>
+              ) : (
+                block.lines.map((line) => renderModule(line.text, line.id, false, block))
+              );
+            return (
+              <Reorder.Item key={block.id} value={block} id={block.id} className="relative flex flex-col gap-2">
+                {block.header && renderModule(block.header.text, block.header.id, true, block)}
+                {lineGroup}
+              </Reorder.Item>
+            );
+          })}
           <div className="h-16 shrink-0" />
         </Reorder.Group>
       </div>
@@ -321,7 +424,7 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
       {/* Add Instruction Button (Styled like a heavy physical button) */}
       <button
         onClick={() => { hapticTap(); openSheet(); }}
-        className="w-full h-14 bg-[#1A1D23] text-[#C9D1D9] border-t-2 border-l-2 border-[#444c56] border-b-4 border-r-4 border-black rounded font-mono font-bold tracking-widest text-[14px] flex items-center justify-center gap-2 shrink-0 active:translate-y-1 active:border-b-2 active:border-r-2 transition-all"
+        className="w-full h-14 bg-[#1A1D23] text-[#C9D1D9] border-2 border-[#444c56] rounded font-mono font-bold tracking-widest text-[14px] flex items-center justify-center gap-2 shrink-0"
       >
         <Cpu size={18} className="text-[#58A6FF]" /> [ WIRE NEW MODULE ]
       </button>
@@ -339,9 +442,9 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
             <div className="flex items-center justify-between border-b-2 border-[#2D333B] px-4 py-3 bg-[#1A1D23]">
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 bg-[#3FB950] animate-pulse rounded-sm" />
-                <span className="font-mono text-[11px] font-bold uppercase tracking-[0.2em] text-[#C9D1D9]">PATCH BAY ACTIVE</span>
+                <span className="font-mono text-[11px] font-bold uppercase tracking-[0.2em] text-[#C9D1D9]">{patchBayStatusLine}</span>
               </div>
-              <button onClick={closeSheet} className="text-[#8B949E] hover:text-[#F85149] transition-colors"><ChevronDown size={24} /></button>
+              <button type="button" onClick={closeSheet} className="text-[#8B949E]"><ChevronDown size={24} /></button>
             </div>
             
             <div className="p-4 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSI0IiBmaWxsPSIjMEEwQzBGIj48L3JlY3Q+CjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMxQTFEMjMiPjwvcmVjdD4KPC9zdmc+')] min-h-[35vh]">
@@ -402,8 +505,8 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
               )}
               {(composerPath === 'movement_action' || composerPath === 'insert_action') && (
                 <div className="grid grid-cols-2 gap-4 mt-2">
-                  <button onClick={() => handleAction('GO')} className={`${keyBase} bg-[#3FB950] border-[#238636] text-[#0D0F12] text-[16px] h-20 shadow-[0_0_20px_rgba(63,185,80,0.3)]`}>[ .GO ]</button>
-                  <button onClick={() => handleAction('YIELD')} className={`${keyBase} bg-[#D29922] border-[#a3712f] text-[#0D0F12] text-[16px] h-20 shadow-[0_0_20px_rgba(210,153,34,0.3)]`}>[ .YIELD ]</button>
+                  <button type="button" onClick={() => handleAction('GO')} className={`${keyBase} bg-[#3FB950] border-[#238636] text-[#0D0F12] text-[16px] h-20`}>[ .GO ]</button>
+                  <button type="button" onClick={() => handleAction('YIELD')} className={`${keyBase} bg-[#D29922] border-[#a3712f] text-[#0D0F12] text-[16px] h-20`}>[ .YIELD ]</button>
                 </div>
               )}
             </div>

@@ -1,5 +1,5 @@
 THE GOSAVTOMATIKA DOCTRINE
-Core Design Ideals for "Traffic Terminal"
+Core design ideals for Traffic Control Terminal (GOSAVTOMATIKA)
 1. DIEGETIC PURITY (The Terminal Axiom)
 
 You are not building a game; you are building a piece of industrial hardware.

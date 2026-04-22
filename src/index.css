@@ -11,6 +11,28 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
+  .scrollbar-editor-touch {
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+    scrollbar-color: var(--ink-muted) var(--surface);
+  }
+  .scrollbar-editor-touch::-webkit-scrollbar {
+    width: 16px;
+  }
+  .scrollbar-editor-touch::-webkit-scrollbar-track {
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+  }
+  .scrollbar-editor-touch::-webkit-scrollbar-thumb {
+    background: var(--ink-muted);
+    border-radius: 8px;
+    border: 4px solid var(--surface);
+    min-height: 48px;
+  }
+  .scrollbar-editor-touch::-webkit-scrollbar-thumb:active {
+    background: var(--accent);
+  }
   
   .crt-bezel {
     border-radius: 2rem;

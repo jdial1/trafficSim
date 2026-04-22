@@ -1,9 +1,11 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronUp, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Save, Plus, Minus, Trash2, Download, Mail, Terminal, Map as MapIcon } from 'lucide-react';
+import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronUp, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Plus, Minus, Trash2, Download, Mail, Terminal, Map as MapIcon } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { VehicleInspectTooltip, TrafficFlowRates, BadgeView, CollapsibleSection, PhaseLogList, LevelCompleteModal, MasterSwitch, CrashModal } from './UI';
 import { AnalyticalChart, QueueChart } from './Charts';
+import { CTA, hudSiteTitle } from './branding';
+import { APP_BUILD_VERSION } from './generatedVersion';
 import { Histogram, ManualOverlay, LevelSelect, GameIntro, FirmwareUpdatePrompt } from './CoreComponents';
 import { level1Briefing } from './types';
 import { MobileEditor } from './MobileEditor';
@@ -33,28 +35,27 @@ export default function App() {
     showHeatmap, setShowHeatmap, loopLastMs, setLoopLastMs, loopAvg10Ms, setLoopAvg10Ms, crashInfo, setCrashInfo,
     isCrashModalMinimized, setIsCrashModalMinimized, levelCompleteInfo, setLevelCompleteInfo,
     isOptimizing, setIsOptimizing, toasts, addToast,
-    isManualOpen, setIsManualOpen, installDeferred, setInstallDeferred, isStandaloneDisplay, setIsStandaloneDisplay,
+    isManualOpen, setIsManualOpen, installDeferred, isStandaloneDisplay, setIsStandaloneDisplay,
     cycleDemandRef, skipConditionalAfterInjectRef, cycleCounterRef,
     programCode, setProgramCode, compiledPhases, setCompiledPhases, compiledRules, setCompiledRules,
     injectedPhase, setInjectedPhase, programError, setProgramError, isEditMode, setIsEditMode,
-    userTemplate, setUserTemplate, cmdDir, setCmdDir, cmdTurn, setCmdTurn,
-    appendCommand, appendPhase, deleteLastLine, saveUserTemplate, compile,
+    cmdDir, setCmdDir, cmdTurn, setCmdTurn,
+    appendCommand, appendPhase, deleteLastLine, compile,
     vehiclesRef, forceRareSpawnRef, forceLegendarySpawnRef, laneCarsCacheRef, skidMarksRef,
     previousRearTiresRef, requestRef, lastTimeRef, crashDetectedRef, loopUpdateSectionsRef,
     loopDrawSectionsRef, loopTotalMsWindowRef, loopHudThrottleRef, bgFontsReady, setBgFontsReady,
-    heatMapRef, addLog, resetSimulation, handleSelectLevel, applyTemplate, detectCrash,
+    heatMapRef, addLog, resetSimulation, resetDirectiveRunProgress, handleSelectLevel, detectCrash,
     yieldMovements, activeMovements, update, draw, loop, triggerRedraw, handlePhaseTimingChange,
-    getPercentage, toggleCollapsed, togglePlayback, dismissIntroSplash, enterGameFromIntro, returnToMainMenu,
+    getPercentage, toggleCollapsed, togglePlayback, triggerPwaInstall, enterGameFromIntro, returnToMainMenu,
     handleCanvasWheel, handleCanvasPointerDown, handleCanvasPointerMove, handleCanvasPointerUp, startSidebarResize,
     phaseRowCount, cycleLength, sidebarColumnWidth, engineeringTemplateBlurb
   } = useTrafficSimulation();
 
   if (introPhase !== null) {
-
     return (
       <GameIntro
-        phase={introPhase}
-        onDismissSplash={dismissIntroSplash}
+        showInstallPrompt={!!installDeferred && !isStandaloneDisplay}
+        onInstallApp={triggerPwaInstall}
         onEnterGame={enterGameFromIntro}
       />
     );
@@ -70,21 +71,23 @@ export default function App() {
 
   if (isMobilePortrait) {
     return (
-      <div className="h-[100dvh] w-full flex flex-col bg-[#0D0F12] overflow-hidden border-2 border-[#2D333B] relative crt-bezel">
+      <div
+        className={`h-[100dvh] w-full flex flex-col bg-[#0D0F12] overflow-hidden border-2 border-[#2D333B] relative${isManualOpen ? '' : ' crt-bezel'}`}
+      >
         {/* Technical Overlays */}
         <div className="pointer-events-none absolute top-14 left-4 font-mono text-[8px] text-[#8B949E] flex flex-col gap-0.5 opacity-30 z-0">
           <div>SYS_TEMP: 42.4°C</div>
           <div>NET_LINK: OK</div>
         </div>
         <div className="pointer-events-none absolute top-14 right-4 font-mono text-[8px] text-[#8B949E] text-right opacity-30 z-0">
-          <div>v4.2.0-STABLE</div>
+          <div>{APP_BUILD_VERSION}</div>
           <div>52.34N 13.40E</div>
         </div>
         
         <header className="shrink-0 bg-[#1A1D23] border-b-2 border-[#2D333B] px-3 py-2 flex items-center justify-between z-10 shadow-md gap-2">
           <div className="flex items-center gap-2 font-mono font-bold tracking-wider text-[11px] min-w-0">
             <span className="text-[#3FB950] shrink-0 animate-pulse">●</span>
-            <span className="text-[#C9D1D9] truncate">TRAFFIC_SEC_082</span>
+            <span className="text-[#C9D1D9] truncate">{hudSiteTitle(APP_BUILD_VERSION)}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
@@ -246,23 +249,9 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <div className="flex-1 min-h-0 flex flex-col p-2 overflow-y-auto">
-                    <div className="flex flex-col gap-2 h-full">
-                      <div className="flex items-center justify-between gap-1 mb-1">
-                        <button
-                          onClick={() => applyTemplate(userTemplate)}
-                          className={`flex-1 text-[10px] py-1.5 rounded-none font-mono border transition-all ${programCode === userTemplate ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}
-                        >
-                          CUSTOM
-                        </button>
-                        <button
-                          onClick={saveUserTemplate}
-                          className="px-3 py-1.5 rounded-none bg-black/20 border border-[#2D333B] text-[#C9D1D9] hover:text-[#3FB950] transition-colors"
-                        >
-                          <Save size={14} />
-                        </button>
-                      </div>
-                      <div className="flex flex-col gap-1">
+                  <div className="flex-1 min-h-0 flex flex-col p-2 overflow-hidden">
+                    <div className="flex flex-col gap-2 flex-1 min-h-0">
+                      <div className="flex flex-col gap-1 shrink-0">
                         <div className="text-[10px] text-[#56D364] font-mono uppercase tracking-wide leading-tight">{engineeringTemplateBlurb.title}</div>
                         <div className="text-[10px] text-[#b7bdc8] font-mono leading-snug">{engineeringTemplateBlurb.body}</div>
                       </div>
@@ -289,14 +278,10 @@ export default function App() {
                             compile();
                             addLog('FIRMWARE COMPILED', 'var(--green)');
                             if (!programError) {
-                              setSessionCarsCleared(0);
-                                            setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
-                              setSessionCrashes(0);
-                              setSessionTime(0);
+                              resetDirectiveRunProgress();
                               setZoom(0.8);
                               isPlayingRef.current = true;
                               setIsPlaying(true);
-                              // --- ADD THIS LINE: Force switch to telemetry dashboard ---
                               setMobileScreen('metrics');
                               setMobileSplitHeight(mobileMinSplitPct);
                             }
@@ -446,7 +431,7 @@ export default function App() {
         <div>SYS_TEMP: 42.4°C</div>
       </div>
       <div className="pointer-events-none absolute bottom-4 right-6 font-mono text-[9px] text-[#8B949E] text-right opacity-30 z-0">
-        <div>v4.2.0-STABLE</div>
+        <div>{APP_BUILD_VERSION}</div>
         <div>COORD: 52.34N 13.40E</div>
       </div>
 
@@ -461,7 +446,7 @@ export default function App() {
             {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
           <span className="text-[#3FB950] shrink-0">●</span>
-          <span className="truncate">TRAFFIC_SEC_082_V4.2</span>
+          <span className="truncate">{hudSiteTitle(APP_BUILD_VERSION)}</span>
           <span className="bg-[#3FB950]/10 text-[#3FB950] px-2 py-0.5 rounded border border-[#3FB950] text-[11px] shrink-0">OPERATIONAL</span>
           <button
             type="button"
@@ -482,17 +467,11 @@ export default function App() {
           {installDeferred && !isStandaloneDisplay && (
             <button
               type="button"
-              onClick={async () => {
-                const ev = installDeferred;
-                if (!ev) return;
-                await ev.prompt();
-                await ev.userChoice;
-                setInstallDeferred(null);
-              }}
+              onClick={() => void triggerPwaInstall()}
               className="flex shrink-0 items-center gap-2 rounded border border-[#D29922]/60 bg-[#D29922]/10 px-2.5 py-1 text-[11px] font-bold tracking-wider text-[#D29922] transition-colors hover:bg-[#D29922]/20"
             >
               <Download size={14} className="shrink-0" />
-              INSTALL TERMINAL
+              {CTA.INSTALL_APP}
             </button>
           )}
           <div>CYCLE: {cycleLength}s / {MAX_TOTAL_LOOP_SECONDS}s</div>
@@ -570,24 +549,6 @@ export default function App() {
 
         <CollapsibleSection id="editor" title="PHASE SEQUENCE" isCollapsed={collapsed.editor} onToggle={toggleCollapsed}>
           <div className="flex flex-col gap-2">
-            <div className="flex flex-col gap-1 mb-2">
-              <div className="flex items-center gap-1">
-                <button 
-                  onClick={() => applyTemplate(userTemplate)}
-                  className={`flex-1 text-[10px] py-1 rounded font-mono border transition-all ${programCode === userTemplate ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}
-                  title={userTemplate ? "Load Saved Template" : "No saved template"}
-                >
-                  CUSTOM
-                </button>
-                <button 
-                  onClick={saveUserTemplate}
-                  className="px-2 py-1 rounded bg-black/20 border border-[#2D333B] text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/40 transition-colors"
-                  title="Save current as CUSTOM"
-                >
-                  <Save size={12} />
-                </button>
-              </div>
-            </div>
             <div className="flex items-center justify-between">
               <div className="text-[11px] text-[#C9D1D9]/70 font-mono leading-tight">
                 {isEditMode ? '# phase(N, min=5, max=10): then .GO/.YIELD cmds (or if/phase_insert)' : 'VIEW_MODE (READ_ONLY)'}
@@ -608,6 +569,7 @@ export default function App() {
                     defaultLanguage="python"
                     theme="vs-dark"
                     value={programCode}
+                    onMount={handleEditorDidMount}
                     onChange={(val) => setProgramCode(val || '')}
                     options={{
                       minimap: { enabled: false },
