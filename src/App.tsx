@@ -429,7 +429,7 @@ import { ManualOverlay } from './components/ManualOverlay';
 import { LevelSelect } from './components/LevelSelect';
 import { BriefingContent, level1Briefing } from './briefing/level1';
 
-import { hapticCrash, hapticHeavy, hapticError } from './haptics';
+import { hapticCrash, hapticHeavy, hapticError, playThunk, startAtmosphericHum, stopAtmosphericHum } from './haptics';
 
 const LevelCompleteModal = ({
   info,
@@ -2500,9 +2500,16 @@ export default function App() {
     triggerRedraw();
   }, [zoom, pan, programCode, mobileScreen, isEditMode, currentPhase, triggerRedraw]);
 
-  const dismissIntroSplash = useCallback(() => setIntroPhase('home'), []);
+  const dismissIntroSplash = useCallback(() => {
+    hapticHeavy();
+    playThunk();
+    startAtmosphericHum();
+    setIntroPhase('home');
+  }, []);
 
   const enterGameFromIntro = useCallback(() => {
+    hapticHeavy();
+    stopAtmosphericHum();
     setIntroPhase(null);
     isPlayingRef.current = false;
     setIsPlaying(false);
@@ -2713,6 +2720,16 @@ export default function App() {
   if (isMobilePortrait) {
     return (
       <div className="h-[100dvh] w-full flex flex-col bg-[#0D0F12] overflow-hidden border-2 border-[#2D333B] relative crt-bezel">
+        {/* Technical Overlays */}
+        <div className="pointer-events-none absolute top-14 left-4 font-mono text-[8px] text-[#8B949E] flex flex-col gap-0.5 opacity-30 z-0">
+          <div>SYS_TEMP: 42.4°C</div>
+          <div>NET_LINK: OK</div>
+        </div>
+        <div className="pointer-events-none absolute top-14 right-4 font-mono text-[8px] text-[#8B949E] text-right opacity-30 z-0">
+          <div>v4.2.0-STABLE</div>
+          <div>52.34N 13.40E</div>
+        </div>
+        
         <header className="shrink-0 bg-[#1A1D23] border-b-2 border-[#2D333B] px-3 py-2 flex items-center justify-between z-10 shadow-md gap-2">
           <div className="flex items-center gap-2 font-mono font-bold tracking-wider text-[11px] min-w-0">
             <span className="text-[#3FB950] shrink-0 animate-pulse">●</span>
@@ -3020,9 +3037,23 @@ export default function App() {
 
   return (
     <div
-      className={`h-screen w-full grid grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-[#0D0F12] ${isResizingSidebar ? '' : 'transition-[grid-template-columns] duration-300 ease-in-out'}`}
+      className={`h-screen w-full grid grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-[#0D0F12] ${isResizingSidebar ? '' : 'transition-[grid-template-columns] duration-300 ease-in-out'} relative`}
       style={{ gridTemplateColumns: `${sidebarColumnWidth}px minmax(0,1fr)` }}
     >
+      {/* Background Grid */}
+      <div className="absolute inset-0 bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:48px_48px] opacity-10 pointer-events-none" />
+      
+      {/* Corner Technical Overlays */}
+      <div className="pointer-events-none absolute top-[60px] left-[300px] font-mono text-[9px] text-[#8B949E] flex flex-col gap-0.5 opacity-30 z-0">
+        <div>NET_LOAD: {(0.4 + Math.random() * 0.2).toFixed(2)}%</div>
+        <div>MEM_BANK: 0x82/0xFF</div>
+        <div>SYS_TEMP: 42.4°C</div>
+      </div>
+      <div className="pointer-events-none absolute bottom-4 right-6 font-mono text-[9px] text-[#8B949E] text-right opacity-30 z-0">
+        <div>v4.2.0-STABLE</div>
+        <div>COORD: 52.34N 13.40E</div>
+      </div>
+
       {/* Header Area */}
       <header className="col-span-full bg-[#1A1D23] border-b border-[#2D333B] flex items-center justify-between px-4 z-10 gap-3">
         <div className="flex items-center gap-3 font-mono font-bold tracking-wider text-xs min-w-0 flex-wrap">

@@ -30,6 +30,17 @@
     background-size: 100% 3px, 6px 100%;
     pointer-events: none;
   }
+
+  .crt-snap {
+    animation: crt-snap 0.4s cubic-bezier(0.23, 1, 0.32, 1) forwards;
+  }
+}
+
+@keyframes crt-snap {
+  0% { transform: scale(1, 0.002); opacity: 0; }
+  40% { transform: scale(1, 0.002); opacity: 1; }
+  70% { transform: scale(1, 1); opacity: 1; }
+  100% { transform: scale(1, 1); opacity: 1; }
 }
 
 @keyframes crt-flicker {

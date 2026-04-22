@@ -25,16 +25,16 @@ export function ManualOverlay({ isOpen, onClose }: Props) {
             style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' viewBox=\'0 0 100 100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.8\' numOctaves=\'4\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100\' height=\'100\' filter=\'url(%23noise)\' opacity=\'0.05\'/%3E%3C/svg%3E")' }}
           >
             <div className="flex items-center justify-between bg-[#2c2b29] text-[#efebd8] px-4 py-2 font-mono font-bold tracking-widest shrink-0">
-              <span>METROCORP ENGINEERING MANUAL v4.2</span>
+              <span>GOSAVTOMATIKA ENGINEERING MANUAL v4.2</span>
               <button onClick={onClose} className="p-1 hover:bg-white/20 rounded transition-colors"><X size={20} /></button>
             </div>
             
             <div className="flex-1 overflow-y-auto p-6 sm:p-10 font-serif leading-relaxed text-[15px] sm:text-[16px]">
-              <h1 className="text-4xl font-bold font-mono border-b-2 border-[#2c2b29] pb-4 mb-8">SEC-082 TRAFFIC NODE PROTOCOL</h1>
+              <h1 className="text-4xl font-bold font-mono border-b-2 border-[#2c2b29] pb-4 mb-8">SEC-082 NODE PROTOCOL</h1>
               
               <h2 className="text-xl font-bold mt-8 mb-4 border-b border-[#2c2b29]/30 pb-2">1. OVERVIEW</h2>
               <p className="mb-4">
-                Welcome to MetroCorp. Your task is to maintain flow efficiency at highly congested intersections.
+                Welcome to GOSAVTOMATIKA. Your directive is to maintain flow efficiency at highly congested intersections.
                 The SEC-082 Node operates using a cyclic phase-based controller. You must divide conflicting movements into separate time phases.
               </p>
 

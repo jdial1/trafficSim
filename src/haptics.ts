@@ -20,6 +20,7 @@ const initAudio = () => {
 };
 
 export const playMechanicalClick = () => {
+  return; // Audio disabled for now
   const ctx = initAudio();
   if (!ctx) return;
 
@@ -75,3 +76,71 @@ export const hapticError = () => {
   vibrate([80, 50, 80]); // compilation error
 };
 export const hapticCrash = () => vibrate([50, 100, 50, 100, 200, 50, 300]); // harsh buzz
+
+export const playThunk = () => {
+  return; // Audio disabled for now
+  const ctx = initAudio();
+  if (!ctx) return;
+
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(80, t);
+  osc.frequency.exponentialRampToValueAtTime(20, t + 0.2);
+
+  gain.gain.setValueAtTime(0.6, t);
+  gain.gain.exponentialRampToValueAtTime(0.01, t + 0.25);
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.start(t);
+  osc.stop(t + 0.25);
+};
+
+let humGain: GainNode | null = null;
+let humOsc1: OscillatorNode | null = null;
+let humOsc2: OscillatorNode | null = null;
+
+export const startAtmosphericHum = () => {
+  return; // Audio disabled for now
+  const ctx = initAudio();
+  if (!ctx || humGain) return;
+
+  humGain = ctx.createGain();
+  humGain.gain.value = 0.04; // Very low volume
+
+  humOsc1 = ctx.createOscillator();
+  humOsc1.type = 'sine';
+  humOsc1.frequency.value = 50; // Low transformer hum (50Hz)
+
+  humOsc2 = ctx.createOscillator();
+  humOsc2.type = 'sine';
+  humOsc2.frequency.value = 50.5; // Slight detune for phasing
+
+  humOsc1.connect(humGain);
+  humOsc2.connect(humGain);
+  humGain.connect(ctx.destination);
+
+  humOsc1.start();
+  humOsc2.start();
+};
+
+export const stopAtmosphericHum = () => {
+  if (humOsc1) {
+    humOsc1.stop();
+    humOsc1.disconnect();
+    humOsc1 = null;
+  }
+  if (humOsc2) {
+    humOsc2.stop();
+    humOsc2.disconnect();
+    humOsc2 = null;
+  }
+  if (humGain) {
+    humGain.disconnect();
+    humGain = null;
+  }
+};
