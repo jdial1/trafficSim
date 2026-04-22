@@ -39,7 +39,7 @@ export function GameIntro({ phase, onDismissSplash, onEnterGame }: GameIntroProp
                 height={64}
               />
               <div>
-                <p className="font-mono text-[11px] font-bold tracking-[0.35em] text-[#8B949E]">OMNICORP</p>
+                <p className="font-mono text-[11px] font-bold tracking-[0.35em] text-[#8B949E]">METROCORP</p>
                 <h1 className="mt-2 font-mono text-2xl font-bold tracking-tight text-[#C9D1D9] sm:text-3xl">TRAFFIC TERMINAL</h1>
                 <p className="mt-3 max-w-md font-mono text-xs leading-relaxed text-[#8B949E] sm:text-[13px]">
                   Authorized personnel only. Programming traffic control firmware for live intersection deployment.

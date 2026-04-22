@@ -26,7 +26,7 @@ export interface MovementTiming {
   allRed: number;
 }
 
-export type VehicleType = 'CAR' | 'MOTORCYCLE' | 'BUS' | 'TRUCK';
+export type VehicleType = 'CAR' | 'MOTORCYCLE' | 'BUS' | 'TRUCK' | 'VIP';
 
 export interface Vehicle {
   id: string;
@@ -56,6 +56,7 @@ export interface Vehicle {
   startDelay: number;
   spawnAtMs: number;
   brakeIntensity?: number;
+  originDir: 'N' | 'S' | 'E' | 'W';
 }
 
 export interface Lane {

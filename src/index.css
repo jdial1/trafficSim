@@ -15,6 +15,7 @@
   .crt-bezel {
     border-radius: 2rem;
     box-shadow: inset 0 0 100px rgba(0,0,0,0.8), 0 0 20px rgba(0,0,0,0.5);
+    animation: crt-flicker 0.15s infinite;
   }
   .crt-bezel::after {
     content: " ";
@@ -24,11 +25,23 @@
     left: 0;
     bottom: 0;
     right: 0;
-    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.03) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.01), rgba(0, 255, 0, 0.005), rgba(0, 0, 255, 0.01));
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
     z-index: 100;
-    background-size: 100% 4px, 6px 100%;
+    background-size: 100% 3px, 6px 100%;
     pointer-events: none;
   }
+}
+
+@keyframes crt-flicker {
+  0% { opacity: 0.98; }
+  5% { opacity: 0.95; }
+  10% { opacity: 0.98; }
+  15% { opacity: 1; }
+  50% { opacity: 0.98; }
+  60% { opacity: 0.96; }
+  70% { opacity: 0.98; }
+  80% { opacity: 1; }
+  100% { opacity: 0.98; }
 }
 
 @theme {
@@ -56,6 +69,10 @@ body {
     font-family: var(--font-sans);
     @apply antialiased overflow-hidden;
     font-size: 13px;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    overscroll-behavior: none;
 }
 
 ::-webkit-scrollbar {

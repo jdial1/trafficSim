@@ -1,4 +1,3 @@
-import { PHASE_TEMPLATES } from '../constants';
 
 export interface BriefingContent {
   id: string;
@@ -9,61 +8,81 @@ export interface BriefingContent {
   bullets: string[];
   hardware: string[];
   initialCode: string;
+  winCondition: {
+    clearCars: number;
+    minPerDirection?: number;
+  };
+  closedLanes?: string[];
+  constraints?: {
+    maxPhases?: number;
+    noConditionals?: boolean;
+  };
 }
 
 export const level1Briefing: BriefingContent[] = [
   {
     id: "1A",
-    title: "1A: North/South Only",
-    from: "OmniCorp Dispatch <dispatch@omnicorp.gov>",
-    subject: "URGENT: Intersection Sec-082 (Part 1)",
-    body: "Sec-082 is one four-leg intersection: three approach lanes per cardinal direction (left, through, right). For this directive, demand is restricted to the north–south legs only; east and west spawns are suspended so you can focus on vertical flow. Alternate north and south with non-overlapping phases.",
+    title: "1A: N/S FLOW",
+    from: "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
+    subject: "DIRECTIVE 82-A: N/S AXIS ALIGNMENT",
+    body: "LATENCY ON SEC-082 N/S CORRIDOR EXCEEDS ACCEPTABLE THRESHOLDS. EAST/WEST SENSORS ARE TEMPORARILY DISABLED FOR CALIBRATION. YOUR TASK IS TO ESTABLISH BASELINE THROUGHPUT ON THE NORTH AND SOUTH AXES.",
     bullets: [
-      "Create one phase that allows NORTH traffic (all three lanes).",
-      "Create a second phase that allows SOUTH traffic (all three lanes).",
-      "Use .GO so opposing stacks never conflict in the same phase."
+      "CLEAR 50 VEHICLES.",
+      "ENSURE BOTH NORTH AND SOUTH AXES ARE PROCESSED.",
+      "FAILURE: GRID LOCK DETECTED.",
+      "MAINTAIN HARDWARE SAFETY LIMITS. AVOID HEAD-ON COLLISIONS."
     ],
     hardware: [
-      "TRAFFIC_SEC_082_V4.2 Node",
-      "Basic Traffic Sense",
-      "Punch-Card Input System"
+      "SEC-082 BASE LOGIC CONTROLLER",
+      "N/S SENSOR ARRAY",
+      "MANUAL OVERRIDE SWITCH"
     ],
-    initialCode: "phase(1):\nNORTH_ALL.GO\n\nphase(2):\nSOUTH_ALL.GO\n"
+    initialCode: "",
+    winCondition: { clearCars: 50, minPerDirection: 15 },
+    closedLanes: ["eb-left", "eb-thru", "eb-right", "wb-left", "wb-thru", "wb-right"],
+    constraints: { maxPhases: 2, noConditionals: true }
   },
   {
     id: "1B",
-    title: "1B: East/West Crossing",
-    from: "OmniCorp Dispatch <dispatch@omnicorp.gov>",
-    subject: "URGENT: Intersection Sec-082 (Part 2)",
-    body: "Same single intersection; demand is now restricted to the east–west legs while north–south spawns are suspended. Alternate eastbound and westbound stacks so the three east lanes and three west lanes never get a conflicting green together.",
+    title: "1B: E/W FLOW",
+    from: "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
+    subject: "DIRECTIVE 82-B: E/W AXIS ALIGNMENT",
+    body: "N/S SENSORS HAVE BEEN TAKEN OFFLINE FOR DIAGNOSTICS. EAST/WEST TRAFFIC IS NOW BACKING UP INTO THE INDUSTRIAL DISTRICT. RESTORE FLOW WITHOUT EXCEEDING CYCLE BUDGET.",
     bullets: [
-      "Create one phase for EAST traffic (left, through, right).",
-      "Create a second phase for WEST traffic (left, through, right).",
-      "Keep east and west in separate phases."
+      "CLEAR 50 VEHICLES.",
+      "ENSURE BOTH EAST AND WEST AXES ARE PROCESSED.",
+      "FAILURE: GRID LOCK DETECTED.",
+      "KEEP EAST AND WEST TRAFFIC ISOLATED TO PREVENT INCIDENTS."
     ],
     hardware: [
-      "TRAFFIC_SEC_082_V4.2 Node",
-      "Basic Traffic Sense",
-      "Punch-Card Input System"
+      "SEC-082 BASE LOGIC CONTROLLER",
+      "E/W SENSOR ARRAY",
+      "MANUAL OVERRIDE SWITCH"
     ],
-    initialCode: "phase(1):\nEAST_ALL.GO\n\nphase(2):\nWEST_ALL.GO\n"
+    initialCode: "",
+    winCondition: { clearCars: 50, minPerDirection: 15 },
+    closedLanes: ["nb-left", "nb-thru", "nb-right", "sb-left", "sb-thru", "sb-right"],
+    constraints: { maxPhases: 2, noConditionals: true }
   },
   {
     id: "1C",
-    title: "1C: Full Integration",
-    from: "OmniCorp Dispatch <dispatch@omnicorp.gov>",
-    subject: "URGENT: Intersection Sec-082 (Part 3)",
-    body: "All four approaches are live again on the same Sec-082 node. Build one coordinated ring that serves every lane type (protected lefts, through, rights, and crosswalks where you use them) without conflicts. The STD preset matches this geometry.",
+    title: "1C: FULL INTEGRATION",
+    from: "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
+    subject: "DIRECTIVE 82-C: FULL OPERATION",
+    body: "DIAGNOSTICS COMPLETE. ALL SENSORS ON SEC-082 ARE ACTIVE. CONGESTION IS CRITICAL. DESIGN A 4-PHASE CYCLE TO PROCESS ALL DIRECTIONS EFFICIENTLY. DO NOT EXCEED THE 60-TICK CYCLE OVERHEAT LIMIT.",
     bullets: [
-      "Run a full cycle for N, S, E, and W (three lanes each).",
-      "Group only compatible movements in the same phase.",
-      "Keep total green within the controller loop budget."
+      "CLEAR 50 VEHICLES.",
+      "ENSURE ALL FOUR AXES MAINTAIN MINIMUM FLOW.",
+      "FAILURE: GRID LOCK DETECTED.",
+      "ISOLATE CONFLICTING MOVEMENTS INTO DISCRETE PHASES."
     ],
     hardware: [
-      "TRAFFIC_SEC_082_V4.2 Node",
-      "Basic Traffic Sense",
-      "Punch-Card Input System"
+      "SEC-082 MULTIPLEX CONTROLLER",
+      "FULL SENSOR ARRAY",
+      "PHASE SEQUENCER"
     ],
-    initialCode: PHASE_TEMPLATES[0].code
+    initialCode: "",
+    winCondition: { clearCars: 50, minPerDirection: 15 },
+    constraints: { maxPhases: 4, noConditionals: true }
   }
 ];

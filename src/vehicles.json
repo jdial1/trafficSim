@@ -10,6 +10,16 @@
   ],
   "spawnRollOrder": [
     {
+      "vType": "VIP",
+      "rLessThan": 0.05,
+      "width": 20,
+      "length": 55,
+      "cruiseSpeedMin": 2.0,
+      "cruiseSpeedMax": 3.0,
+      "accel": 0.06,
+      "decel": 0.15
+    },
+    {
       "vType": "MOTORCYCLE",
       "rLessThan": 0.15,
       "width": 8,

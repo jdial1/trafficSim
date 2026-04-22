@@ -1,0 +1,68 @@
+THE GOSAVTOMATIKA DOCTRINE
+Core Design Ideals for "Traffic Terminal"
+1. DIEGETIC PURITY (The Terminal Axiom)
+
+You are not building a game; you are building a piece of industrial hardware.
+The player is a low-level engineer operating a retro-futuristic traffic controller.
+
+    No "Gamey" UI: Eliminate traditional game menus, "Level Up" screens, or cartoonish pop-ups. If a UI element cannot be justified as a physical button, an LED array, or a CRT text readout on a 1980s control board, it does not belong.
+
+    The Manual is the Tutorial: Do not use intrusive, hand-holding tooltips. Teach the player through the diegetic ManualOverlay. The satisfaction comes from reading the documentation and having the "Aha!" moment.
+
+    Aesthetic Brutalism: Stick to the established palette (Dark grays, terminal green, amber, harsh red). Use monospace fonts exclusively.
+
+2. TACTILE ENGINEERING (The Mobile-First Axiom)
+
+Programming on a phone must feel like patching cables, not typing on glass.
+
+    Zero Text Entry: The player must never be forced to use the native iOS/Android keyboard. All logic (phase, .GO, .YIELD) is assembled via chunky, tactile blocks.
+
+    Heavy Haptics: Every action must have physical weight. Snapping a phase into place, deleting a command, or flipping the execution switch must be accompanied by distinct, satisfying haptic feedback (hapticTap, hapticHeavy) and mechanical audio cues.
+
+    Fat-Finger Tolerance: Interactive elements must be large, high-contrast, and spaced appropriately. Hide secondary information in collapsible or swipeable panels rather than cluttering the active workspace.
+
+3. OPTIMIZATION OVER COMPLETION (The Zachtronics Axiom)
+
+Solving the puzzle is only the tutorial; optimizing the solution is the game.
+
+    The Three Metrics: Every level is judged on three immutable constraints:
+
+        Cycle Time (Speed): Average seconds to clear a vehicle.
+
+        Lines of Code (Efficiency): Total operational commands used.
+
+        Hardware Cost (Budget): Financial cost of the logic used (e.g., standard phases are cheap; if(QUEUE) sensors are highly expensive).
+
+    The Histogram: The post-level screen must show the player how they compare to "Bureau Averages" (or other players). This drives the replay loop. "You passed, but your hardware cost is in the bottom 20%. Try again."
+
+    Predictable Determinism: The simulation must be 100% deterministic. If a player runs the exact same code twice, the exact same traffic patterns and crashes must occur at the exact same milliseconds. Randomness destroys the ability to optimize.
+
+4. SCHEMATIC CLARITY (The Visual Axiom)
+
+Function dictates form. The canvas is a technical drawing, not a diorama.
+
+    No Unnecessary Rendering: Vehicles are high-contrast geometric silhouettes. Do not add headlights, shadows, or realistic textures. The player needs to see the flow, not the paint job.
+
+    Information Density: Use ghosting, trails, and heatmaps to convey speed and congestion at a glance. The visual state of the board must communicate exactly why a crash happened or why a queue is backing up.
+
+    Readability First: Lane markings, signal states (Green/Amber/Red), and collision points must instantly draw the eye.
+
+5. RUTHLESS REDUCTION (The Anti-Bloat Axiom)
+
+If a feature does not directly serve the cycle of "Build → Execute → Analyze → Optimize," it is bloat. Cut it.
+
+    No Meta-Progression: No unlocking skins, no leveling up avatars, no currency shops. The only progression is the unlocking of harder directives and the player's own mastery of the hardware.
+
+    No Feature Creep: Resist the urge to add weather, day/night cycles, or varied vehicle types unless they specifically alter the mathematical constraints of the logic puzzle.
+
+    One Screen, One Purpose: On mobile, the player is either Reading the Directive, Wiring the Logic, or Watching the Metrics. Do not mash them together. The split-pane layout is for desktop only.
+
+Implementation Checklist for Developers:
+
+    Did I use standard HTML buttons? -> Re-style them as hardware switches.
+
+    Does this feature require typing? -> Convert it to a modular block/tap interface.
+
+    Does the player pass the level by just waiting? -> Enforce a strict time or budget constraint.
+
+    Is the screen too cluttered? -> Move passive data to a secondary tab. Keep the active workspace clean.

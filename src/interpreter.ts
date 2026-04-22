@@ -45,7 +45,12 @@ export interface ParseResult {
   error?: string;
 }
 
-export function parseTrafficProgram(code: string): ParseResult {
+export interface HardwareConstraints {
+  maxPhases?: number;
+  noConditionals?: boolean;
+}
+
+export function parseTrafficProgram(code: string, constraints?: HardwareConstraints): ParseResult {
   const phases: Phase[] = [];
   const rules: ConditionalRule[] = [];
   const lines = code.split('\n');
@@ -196,6 +201,15 @@ export function parseTrafficProgram(code: string): ParseResult {
 
   if (phases.length === 0) {
     return { phases: [], rules, error: 'No valid phases found.' };
+  }
+
+  if (constraints) {
+    if (constraints.maxPhases && phases.length > constraints.maxPhases) {
+      return { phases: [], rules: [], error: `ERR_HW_LIMIT_EXCEEDED: Maximum of ${constraints.maxPhases} phases allowed.` };
+    }
+    if (constraints.noConditionals && rules.length > 0) {
+      return { phases: [], rules: [], error: `ERR_HW_LIMIT_EXCEEDED: Sec-082 Node does not support conditional routing.` };
+    }
   }
 
   return { phases, rules };

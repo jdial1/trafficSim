@@ -13,6 +13,7 @@ type Props = {
   appendPhase: () => void;
   deleteLastLine: () => void;
   activePhaseIndex?: number;
+  closedLanes?: string[];
 };
 
 type LineData = { id: string; text: string };
@@ -23,11 +24,21 @@ type BlockData = {
   phaseIndex?: number;
 };
 
-export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteLastLine, activePhaseIndex }: Props) {
+export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteLastLine, activePhaseIndex, closedLanes }: Props) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [composerPath, setComposerPath] = useState<'root' | 'movement_dir' | 'movement_turn' | 'movement_action' | 'cw_action' | 'if_dir' | 'if_turn' | 'if_gt' | 'insert_dir' | 'insert_turn' | 'insert_action'>('root');
   const [builderBase, setBuilderBase] = useState('');
   const [blocks, setBlocks] = useState<BlockData[]>([]);
+
+  const closedDirections = new Set<string>();
+  if (closedLanes) {
+    closedLanes.forEach(laneId => {
+      if (laneId.startsWith('nb-')) closedDirections.add('NORTH');
+      if (laneId.startsWith('sb-')) closedDirections.add('SOUTH');
+      if (laneId.startsWith('eb-')) closedDirections.add('EAST');
+      if (laneId.startsWith('wb-')) closedDirections.add('WEST');
+    });
+  }
 
   useEffect(() => {
     setBlocks((prevBlocks) => {
@@ -182,7 +193,7 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
     
     const isPhase = text.trim().startsWith('phase(');
     const isCondition = text.trim().startsWith('if ');
-    const isActivePhase = isPhase && block.phaseIndex === activePhaseIndex;
+    const isActiveBlock = block.phaseIndex !== undefined && block.phaseIndex === activePhaseIndex;
     
     return (
       <div key={id} className={`relative group ${!isHeader && block.header ? 'ml-6' : ''} mb-2`}>
@@ -207,18 +218,18 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
             }
           }}
           whileDrag={{ scale: 1.02, boxShadow: '0px 10px 20px rgba(0,0,0,0.5)' }}
-          className={`relative z-10 flex items-stretch border-2 ${isActivePhase ? 'border-[#58A6FF]' : 'border-[#2D333B]'} bg-[#161B22] rounded-md shadow-[0_4px_0_rgba(26,29,35,1)] hover:shadow-[0_2px_0_rgba(26,29,35,1)] hover:translate-y-[2px] transition-all`}
+          className={`relative z-10 flex items-stretch border-2 ${isActiveBlock ? 'border-[#58A6FF] shadow-[0_0_15px_rgba(88,166,255,0.4)]' : 'border-[#2D333B] shadow-[0_4px_0_rgba(26,29,35,1)]'} bg-[#161B22] rounded-md hover:translate-y-[2px] transition-all`}
         >
           {/* Grip / Status LED */}
-          <div className={`w-8 border-r-2 ${isActivePhase ? 'border-[#58A6FF]' : 'border-[#2D333B]'} flex flex-col items-center justify-between py-2 ${isActivePhase ? 'bg-[#58A6FF]/20' : isPhase ? 'bg-[#3FB950]/10' : isCondition ? 'bg-[#D29922]/10' : 'bg-black/20'}`}>
-            <div className={`w-2 h-2 rounded-full ${isActivePhase ? 'bg-[#58A6FF] shadow-[0_0_12px_#58A6FF] animate-pulse' : isPhase ? 'bg-[#3FB950] shadow-[0_0_8px_#3FB950]' : isCondition ? 'bg-[#D29922] shadow-[0_0_8px_#D29922]' : 'bg-[#2D333B]'}`} />
-            <GripVertical size={14} className={isActivePhase ? "text-[#58A6FF]" : "text-[#444c56]"} />
+          <div className={`w-8 border-r-2 ${isActiveBlock ? 'border-[#58A6FF]' : 'border-[#2D333B]'} flex flex-col items-center justify-between py-2 ${isActiveBlock ? 'bg-[#58A6FF]/20' : isPhase ? 'bg-[#3FB950]/10' : isCondition ? 'bg-[#D29922]/10' : 'bg-black/20'}`}>
+            <div className={`w-2 h-2 rounded-full ${isActiveBlock ? 'bg-[#58A6FF] shadow-[0_0_12px_#58A6FF] animate-pulse' : isPhase ? 'bg-[#3FB950] shadow-[0_0_8px_#3FB950]' : isCondition ? 'bg-[#D29922] shadow-[0_0_8px_#D29922]' : 'bg-[#2D333B]'}`} />
+            <GripVertical size={14} className={isActiveBlock ? "text-[#58A6FF]" : "text-[#444c56]"} />
             <div className="w-[4px] h-[4px] rounded-full bg-[#0D0F12] shadow-inner" /> {/* Fake Screw */}
           </div>
 
           {/* Code Screen */}
           <div className="p-3 font-mono text-[11px] sm:text-xs flex-1 flex items-center justify-between overflow-hidden">
-            <span className={`truncate ${isActivePhase ? 'text-[#58A6FF] font-bold' : isPhase ? 'text-[#3FB950] font-bold' : isCondition ? 'text-[#D29922]' : 'text-[#C9D1D9]'}`}>
+            <span className={`truncate ${isActiveBlock ? 'text-[#58A6FF] font-bold' : isPhase ? 'text-[#3FB950] font-bold' : isCondition ? 'text-[#D29922]' : 'text-[#C9D1D9]'}`}>
               {text.trim()}
             </span>
             <div className="shrink-0 ml-2 flex items-center gap-1">
@@ -286,20 +297,43 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
               {/* ... The rest of the builder options remain functionally the same, but use the updated keyBase styling ... */}
               {(composerPath === 'movement_dir' || composerPath === 'if_dir' || composerPath === 'insert_dir') && (
                 <div className="grid grid-cols-2 gap-3">
-                  {DIRS.map(d => (
-                    <button key={d} onClick={() => handleDir(d)} className={`${keyBase} ${keyNeutral}`}>[ {d} ]</button>
-                  ))}
+                  {DIRS.map(d => {
+                    const isClosed = closedDirections.has(d);
+                    return (
+                      <button 
+                        key={d} 
+                        onClick={() => !isClosed && handleDir(d)} 
+                        className={`${keyBase} ${keyNeutral} ${isClosed ? 'opacity-20 grayscale pointer-events-none' : ''}`}
+                      >
+                        [ {d} ]
+                      </button>
+                    );
+                  })}
                   {composerPath === 'movement_dir' && (
-                    <button onClick={() => handleDir('CROSSWALK')} className={`col-span-2 ${keyBase} bg-[#D29922]/20 border-[#D29922]/50 text-[#D29922] mt-2`}>[ CROSSWALK ]</button>
+                    <button 
+                      onClick={() => closedDirections.size === 0 && handleDir('CROSSWALK')} 
+                      className={`col-span-2 ${keyBase} bg-[#D29922]/20 border-[#D29922]/50 text-[#D29922] mt-2 ${closedDirections.size > 0 ? 'opacity-20 grayscale pointer-events-none' : ''}`}
+                    >
+                      [ CROSSWALK ]
+                    </button>
                   )}
                 </div>
               )}
               {(composerPath === 'movement_turn' || composerPath === 'if_turn' || composerPath === 'insert_turn') && (
                 <div className="grid grid-cols-2 gap-3">
                   {builderBase === 'CROSSWALK_' ? (
-                    DIRS.map(d => (
-                      <button key={d} onClick={() => handleTurn(d)} className={`${keyBase} ${keyNeutral}`}>[ {d} ]</button>
-                    ))
+                    DIRS.map(d => {
+                      const isClosed = closedDirections.has(d);
+                      return (
+                        <button 
+                          key={d} 
+                          onClick={() => !isClosed && handleTurn(d)} 
+                          className={`${keyBase} ${keyNeutral} ${isClosed ? 'opacity-20 grayscale pointer-events-none' : ''}`}
+                        >
+                          [ {d} ]
+                        </button>
+                      );
+                    })
                   ) : (
                     TURNS.map(t => (
                       <button key={t} onClick={() => handleTurn(t)} className={`${keyBase} ${keyNeutral}`}>[ {t.replace('_', '')} ]</button>

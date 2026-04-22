@@ -9,14 +9,17 @@ import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, C
 import Editor, { useMonaco } from '@monaco-editor/react';
 import { Movement, Vehicle, Lane, LightState, MovementTiming, VehicleType } from './types';
 import { parseTrafficProgram, Phase, ConditionalRule, PhaseCommand, KEYWORD_MAP } from './interpreter';
-import { CANVAS_SIZE, INTERSECTION_SIZE, LANE_WIDTH, LANES, DEFAULT_TIMINGS, DEFAULT_PHASE_GREEN_SECONDS, DEFAULT_BUILTIN_PHASE_TIMINGS, BASE_SPAWN_RATE, SPAWN_DRIFT_SPEED, MIN_PHASE_GREEN_SECONDS, MAX_TOTAL_LOOP_SECONDS, clampPhaseTimingsToLoopCap, PHASE_TEMPLATES } from './constants';
+import { CANVAS_SIZE, INTERSECTION_SIZE, LANE_WIDTH, LANES, DEFAULT_TIMINGS, DEFAULT_PHASE_GREEN_SECONDS, DEFAULT_BUILTIN_PHASE_TIMINGS, BASE_SPAWN_RATE, SPAWN_DRIFT_SPEED, MIN_PHASE_GREEN_SECONDS, MAX_TOTAL_LOOP_SECONDS, clampPhaseTimingsToLoopCap } from './constants';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import vehicleCatalog from './vehicles.json';
 import { renderVehicleSprite } from './renderVehicleDesign';
 import { FirmwareUpdatePrompt } from './components/FirmwareUpdatePrompt';
 import { GameIntro } from './components/GameIntro';
-import { MobileOmniCorpEditor } from './components/MobileOmniCorpEditor';
+import { MobileEditor } from './components/MobileEditor';
 import { loadSession, saveSession } from './persist/mobileSessionDb';
+import { detectCrash, getRearTirePositions, getPathGeometry, getPathEndPoint, pickVehicleAtCanvasPoint, SkidMarkSegment, CrashInfo, RearTires } from './engine/IntersectionEngine';
+import { useGlobalState } from './store/GlobalStateContext';
+
 
 type BeforeInstallPromptEventExtended = Event & {
   prompt: () => Promise<void>;
@@ -35,7 +38,7 @@ const MOBILE_EXTRA_ZOOM_STEPS = 2;
 const SIDEBAR_DEFAULT_WIDTH = 280;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 520;
-const MOBILE_SPLIT_HANDLE_PX = 16;
+const MOBILE_SPLIT_HANDLE_PX = 32;
 const MOBILE_COLLAPSED_STRIP_PX = 52;
 const MOBILE_SPLIT_MAX_RATIO = 0.85;
 const HEAT_GRID_COLS = 48;
@@ -57,7 +60,7 @@ const ADJACENT_LEFT_MERGE_PAIR_KEYS = new Set([
   'nb-left|sb-left',
   'sb-left|wb-left',
 ]);
-const TIME_SCALE_OPTIONS = [1, 2, 5] as const;
+const TIME_SCALE_OPTIONS = [1, 2, 5, 10] as const;
 type TimeScale = (typeof TIME_SCALE_OPTIONS)[number];
 
 function narrowViewport() {
@@ -116,92 +119,10 @@ function formatActiveMovements(activeMovements: Movement[]): string {
 interface LogEntry { id: string; time: string; event: string; color?: string; }
 interface HistoryEntry { time: string; P1: number; P2: number; P3: number; P4: number; }
 interface QueueHistoryEntry { time: string; [key: string]: string | number; }
-interface Point2D { x: number; y: number; }
-interface RearTires { left: Point2D; right: Point2D; }
-interface SkidMarkSegment {
-  from: Point2D;
-  to: Point2D;
-  bornAt: number;
-  ttlMs: number;
-  baseAlpha: number;
-  width: number;
-}
-interface CrashInfo {
-  x: number;
-  y: number;
-  laneA: string;
-  laneB: string;
-  vehicleIds: [string, string];
-}
 
 const SKID_MARK_BRAKE_THRESHOLD = 0.8;
 const SKID_MARK_TTL_MS = 2800;
 const MAX_SKID_MARK_SEGMENTS = 2400;
-
-function getRearTirePositions(vehicle: Vehicle): RearTires {
-  const forwardX = Math.cos(vehicle.angle);
-  const forwardY = Math.sin(vehicle.angle);
-  const lateralX = -forwardY;
-  const lateralY = forwardX;
-  const rearOffset = vehicle.length * 0.32;
-  const tireOffset = vehicle.width * 0.28;
-  const rearCenterX = vehicle.x - forwardX * rearOffset;
-  const rearCenterY = vehicle.y - forwardY * rearOffset;
-  return {
-    left: { x: rearCenterX + lateralX * tireOffset, y: rearCenterY + lateralY * tireOffset },
-    right: { x: rearCenterX - lateralX * tireOffset, y: rearCenterY - lateralY * tireOffset },
-  };
-}
-
-// Memoized Sub-components to prevent flickering from frequent App re-renders
-type PathGeometry = 
-  | { type: 'STRAIGHT', startX: number, startY: number, endX: number, endY: number }
-  | { type: 'ARC', centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number, counterClockwise: boolean };
-
-function getPathGeometry(lane: Lane, centerX: number, centerY: number): PathGeometry {
-  if (lane.type === 'THRU') {
-    if (lane.direction === 'N') return { type: 'STRAIGHT', startX: lane.startX, startY: centerY + 120, endX: lane.endX, endY: centerY - 120 };
-    if (lane.direction === 'S') return { type: 'STRAIGHT', startX: lane.startX, startY: centerY - 120, endX: lane.endX, endY: centerY + 120 };
-    if (lane.direction === 'E') return { type: 'STRAIGHT', startX: centerX - 120, startY: lane.startY, endX: centerX + 120, endY: lane.endY };
-    if (lane.direction === 'W') return { type: 'STRAIGHT', startX: centerX + 120, startY: lane.startY, endX: centerX - 120, endY: lane.endY };
-  } else if (lane.type === 'LEFT') {
-    if (lane.direction === 'N') return { type: 'ARC', centerX: centerX - 120, centerY: centerY + 120, radius: 140, startAngle: 0, endAngle: -Math.PI / 2, counterClockwise: true };
-    if (lane.direction === 'S') return { type: 'ARC', centerX: centerX + 120, centerY: centerY - 120, radius: 140, startAngle: Math.PI, endAngle: Math.PI / 2, counterClockwise: true };
-    if (lane.direction === 'E') return { type: 'ARC', centerX: centerX - 120, centerY: centerY - 120, radius: 140, startAngle: Math.PI / 2, endAngle: 0, counterClockwise: true };
-    if (lane.direction === 'W') return { type: 'ARC', centerX: centerX + 120, centerY: centerY + 120, radius: 140, startAngle: -Math.PI / 2, endAngle: -Math.PI, counterClockwise: true };
-  } else if (lane.type === 'RIGHT') {
-    if (lane.direction === 'N') return { type: 'ARC', centerX: centerX + 120, centerY: centerY + 120, radius: 20, startAngle: Math.PI, endAngle: Math.PI * 1.5, counterClockwise: false };
-    if (lane.direction === 'S') return { type: 'ARC', centerX: centerX - 120, centerY: centerY - 120, radius: 20, startAngle: 0, endAngle: Math.PI / 2, counterClockwise: false };
-    if (lane.direction === 'E') return { type: 'ARC', centerX: centerX - 120, centerY: centerY + 120, radius: 20, startAngle: -Math.PI / 2, endAngle: 0, counterClockwise: false };
-    if (lane.direction === 'W') return { type: 'ARC', centerX: centerX + 120, centerY: centerY - 120, radius: 20, startAngle: Math.PI / 2, endAngle: Math.PI, counterClockwise: false };
-  }
-  return { type: 'STRAIGHT', startX: 0, startY: 0, endX: 0, endY: 0 };
-}
-
-function getPathEndPoint(geom: PathGeometry): Point2D {
-  if (geom.type === 'STRAIGHT') return { x: geom.endX, y: geom.endY };
-  return {
-    x: geom.centerX + geom.radius * Math.cos(geom.endAngle),
-    y: geom.centerY + geom.radius * Math.sin(geom.endAngle),
-  };
-}
-
-function pickVehicleAtCanvasPoint(px: number, py: number, vehicles: Vehicle[]): Vehicle | null {
-  for (let i = vehicles.length - 1; i >= 0; i--) {
-    const v = vehicles[i];
-    const halfLen = v.vType === 'MOTORCYCLE' ? (v.length * 1.25) / 2 : v.length / 2;
-    const halfWid = v.vType === 'MOTORCYCLE' ? (v.width * 1.25) / 2 : v.width / 2;
-    const dx = px - v.x;
-    const dy = py - v.y;
-    const c = Math.cos(-v.angle);
-    const s = Math.sin(-v.angle);
-    const lx = dx * c - dy * s;
-    const ly = dx * s + dy * c;
-    const pad = 6;
-    if (Math.abs(lx) <= halfLen + pad && Math.abs(ly) <= halfWid + pad) return v;
-  }
-  return null;
-}
 
 function VehicleInspectTooltip({ vehicle }: { vehicle: Vehicle }) {
   const lane = LANE_MAP.get(vehicle.laneId);
@@ -503,48 +424,100 @@ const PhaseLogList = React.memo(({ logs, maxHeightClass }: { logs: LogEntry[]; m
   </div>
 ));
 
+import { Histogram } from './components/Histogram';
+import { ManualOverlay } from './components/ManualOverlay';
+import { LevelSelect } from './components/LevelSelect';
 import { BriefingContent, level1Briefing } from './briefing/level1';
 
-const BriefingTab = ({ level, activeSubLevel, onSelectLevel }: { level: BriefingContent; activeSubLevel: number; onSelectLevel: (idx: number) => void }) => (
-  <div className="flex flex-col h-full bg-[#1A1D23] p-4 text-[#C9D1D9] font-mono overflow-y-auto scrollbar-hide">
-    <div className="flex gap-2 mb-4 shrink-0">
-      {level1Briefing.map((l, i) => (
-        <button
-          key={l.id}
-          onClick={() => onSelectLevel(i)}
-          className={`flex-1 py-2 text-center text-[10px] font-bold border rounded-none transition-colors ${i === activeSubLevel ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}
-        >
-          {l.id}
-        </button>
-      ))}
-    </div>
-    <div className="border-2 border-[#2D333B] bg-black/40 rounded-none p-4 mb-4 shadow-xl relative shrink-0">
-      <div className="absolute top-0 right-0 px-2 py-0.5 bg-[#F85149] text-black text-[9px] font-bold tracking-widest">CONFIDENTIAL</div>
-      <div className="text-xs text-[#8B949E] mb-1 mt-2">FROM: <span className="text-[#58A6FF]">{level.from}</span></div>
-      <div className="text-xs text-[#8B949E] mb-3 border-b border-[#2D333B] pb-3">SUBJECT: <span className="text-[#C9D1D9]">{level.subject}</span></div>
-      <div className="text-[13px] leading-relaxed whitespace-pre-wrap">{level.body}</div>
-      <ul className="mt-4 space-y-2 list-disc pl-5 text-[12px] text-[#3FB950]">
-        {level.bullets.map((b, i) => (
-          <li key={i}><span className="text-[#C9D1D9]">{b}</span></li>
-        ))}
-      </ul>
-    </div>
-    <div className="mt-auto border-t-2 border-[#2D333B] pt-4 shrink-0 pb-16">
-      <div className="text-[10px] uppercase text-[#8B949E] tracking-wider mb-2">AUTHORIZED HARDWARE</div>
-      <div className="flex flex-wrap gap-2">
-        {level.hardware.map((h, i) => (
-          <span key={i} className="text-[10px] px-2 py-1 bg-[#D29922]/10 text-[#D29922] border border-[#D29922]/40 rounded-none uppercase">
-            {h}
-          </span>
-        ))}
+import { hapticCrash, hapticHeavy, hapticError } from './haptics';
+
+const LevelCompleteModal = ({
+  info,
+  levelId,
+  isLastLevel,
+  onNext,
+  onRetry
+}: {
+  info: { carsCleared: number; timeSeconds: number; cycleTime: number; linesOfCode: number; hardwareCost: number; };
+  levelId: string;
+  isLastLevel?: boolean;
+  onNext: () => void;
+  onRetry: () => void;
+}) => (
+  <motion.div
+    initial={{ opacity: 0 }}
+    animate={{ opacity: 1 }}
+    exit={{ opacity: 0 }}
+    className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+  >
+    <motion.div
+      initial={{ scale: 0.94, opacity: 0, y: 20 }}
+      animate={{ scale: 1, opacity: 1, y: 0 }}
+      className="w-full max-w-md rounded-none border-2 border-[#3FB950] bg-[#0D0F12] shadow-[0_0_30px_rgba(63,185,80,0.15)] overflow-hidden font-mono"
+    >
+      <div className="bg-[#3FB950] text-[#0D0F12] px-4 py-2 font-bold tracking-widest text-sm flex justify-between">
+        <span>DIRECTIVE COMPLETE</span>
+        <span>{levelId}</span>
       </div>
-    </div>
-  </div>
+      <div className="p-6">
+        <h2 className="text-[#C9D1D9] text-xl font-bold mb-6 text-center tracking-wider">PERFORMANCE METRICS</h2>
+        <div className="space-y-2">
+          <Histogram title="THROUGHPUT" value={info.cycleTime} unit="s" color="#3FB950" min={10} max={120} />
+          <Histogram title="INSTRUCTION COUNT" value={info.linesOfCode} unit=" LINES" color="#58A6FF" min={2} max={30} />
+          <Histogram title="HARDWARE COST" value={info.hardwareCost} unit=" ¥" color="#D29922" min={100} max={2000} />
+        </div>
+        <div className="mt-8 flex gap-3">
+          <button
+            onClick={onRetry}
+            className="flex-1 border border-[#2D333B] bg-black/20 py-2 text-[#C9D1D9] hover:bg-white/5 hover:text-white transition-colors"
+          >
+            OPTIMIZE
+          </button>
+          <button
+            onClick={onNext}
+            className="flex-1 bg-[#3FB950]/20 border border-[#3FB950] text-[#3FB950] py-2 font-bold hover:bg-[#3FB950]/30 transition-colors shadow-[0_0_10px_rgba(63,185,80,0.2)]"
+          >
+            {isLastLevel ? 'FREEPLAY' : 'NEXT LEVEL'}
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  </motion.div>
 );
 
-import { hapticCrash, hapticHeavy } from './haptics';
+const MasterSwitch = ({ isOn, onToggle }: { isOn: boolean; onToggle: () => void }) => {
+  const handleClick = () => {
+    hapticHeavy();
+    onToggle();
+  };
+  return (
+    <div 
+      onClick={handleClick}
+      className="relative w-20 h-10 sm:w-24 sm:h-12 bg-[#161B22] rounded border-2 border-[#2D333B] shadow-[inset_0_0_15px_rgba(0,0,0,0.8)] cursor-pointer flex items-center p-1 shrink-0"
+    >
+      <div className="absolute inset-0 flex justify-between items-center px-2 sm:px-3 pointer-events-none font-mono text-[9px] sm:text-[10px] font-bold tracking-widest">
+        <span className={isOn ? 'text-[#3FB950] animate-pulse' : 'text-[#8B949E]'}>ON</span>
+        <span className={!isOn ? 'text-[#D29922]' : 'text-[#8B949E]'}>OFF</span>
+      </div>
+      <motion.div 
+        initial={false}
+        animate={{ x: isOn ? '100%' : '0%' }}
+        transition={{ type: "spring", stiffness: 500, damping: 30 }}
+        className={`w-1/2 h-full rounded border-b-4 border-r-2 flex items-center justify-center shadow-lg relative z-10 ${
+          isOn 
+            ? 'bg-[#3FB950] border-[#238636]' 
+            : 'bg-[#D29922] border-[#a3712f]'
+        }`}
+      >
+        <div className="w-1 h-4 sm:h-5 bg-black/30 rounded-full" />
+        <div className="w-1 h-4 sm:h-5 bg-black/30 rounded-full ml-1" />
+      </motion.div>
+    </div>
+  );
+};
 
 export default function App() {
+  const { unlockedLevels, unlockLevel, saveSolution, saveHighscore } = useGlobalState();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const simMainRef = useRef<HTMLElement | null>(null);
   const mobileSplitHostRef = useRef<HTMLDivElement | null>(null);
@@ -579,7 +552,9 @@ export default function App() {
     return narrowViewport() && window.matchMedia('(orientation: portrait)').matches;
   });
   const [executionSplitActive, setExecutionSplitActive] = useState(false);
+  const [isFreeplay, setIsFreeplay] = useState(false);
   const [sessionCarsCleared, setSessionCarsCleared] = useState(0);
+  const [sessionCarsByDir, setSessionCarsByDir] = useState<Record<string, number>>({ N: 0, S: 0, E: 0, W: 0 });
   const [sessionCrashes, setSessionCrashes] = useState(0);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [sessionTime, setSessionTime] = useState(0);
@@ -594,13 +569,13 @@ export default function App() {
 
   useEffect(() => {
     let interval: number;
-    if (executionSplitActive && isPlaying) {
+    if (isPlaying) {
       interval = window.setInterval(() => {
         setSessionTime(prev => prev + 1);
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [executionSplitActive, isPlaying]);
+  }, [isPlaying]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -685,18 +660,16 @@ export default function App() {
   }, []);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
     phaseTimings: true,
-    queue: true,
-    log: true,
-    analytics: true,
+    telemetry: false,
     flow: true,
     editor: true,
-    monitor: false,
-    load: false
+    monitor: false
   });
   const [timingHistory, setTimingHistory] = useState<HistoryEntry[]>([]);
   const [queueHistory, setQueueHistory] = useState<QueueHistoryEntry[]>([]);
   
   // Controller State
+  const [wiringPhaseIndex, setWiringPhaseIndex] = useState<number | null>(null);
   const [currentPhase, setCurrentPhase] = useState(0);
   const [lightState, setLightState] = useState<LightState>('GREEN');
   const [timer, setTimer] = useState(0);
@@ -716,7 +689,31 @@ export default function App() {
   const [loopLastMs, setLoopLastMs] = useState(0);
   const [loopAvg10Ms, setLoopAvg10Ms] = useState(0);
   const [crashInfo, setCrashInfo] = useState<CrashInfo | null>(null);
+  useEffect(() => {
+    if (crashInfo) {
+      if (isMobilePortrait) {
+        setMobileScreen('logic');
+        setExecutionSplitActive(false);
+      }
+    }
+  }, [crashInfo, isMobilePortrait]);
+
+  useEffect(() => {
+    if (isMobilePortrait && mobileScreen === 'briefing') {
+      setIsPlaying(false);
+      isPlayingRef.current = false;
+    }
+  }, [mobileScreen, isMobilePortrait]);
+
   const [isCrashModalMinimized, setIsCrashModalMinimized] = useState(false);
+  const [levelCompleteInfo, setLevelCompleteInfo] = useState<{
+    carsCleared: number;
+    timeSeconds: number;
+    cycleTime: number;
+    linesOfCode: number;
+    hardwareCost: number;
+  } | null>(null);
+  const [isManualOpen, setIsManualOpen] = useState(false);
   const [installDeferred, setInstallDeferred] = useState<BeforeInstallPromptEventExtended | null>(null);
   const [isStandaloneDisplay, setIsStandaloneDisplay] = useState(false);
 
@@ -741,59 +738,23 @@ export default function App() {
   // Store accumulated demand per phase over the current cycle
   const cycleDemandRef = useRef<number[]>([]);
   const skipConditionalAfterInjectRef = useRef(false);
-  const briefingSpawnMaskRef = useRef<'NS' | 'EW' | null>(null);
 
   useEffect(() => {
-    if (!isMobilePortrait) {
-      briefingSpawnMaskRef.current = null;
-      setTrafficRates({ N: BASE_SPAWN_RATE, S: BASE_SPAWN_RATE, E: BASE_SPAWN_RATE, W: BASE_SPAWN_RATE });
-      return;
-    }
-    briefingSpawnMaskRef.current = activeSubLevel === 0 ? 'EW' : activeSubLevel === 1 ? 'NS' : null;
+    const currentLevel = level1Briefing[activeSubLevel];
     const base = BASE_SPAWN_RATE;
-    if (activeSubLevel === 0) {
-      setTrafficRates({ N: base, S: base, E: 0, W: 0 });
-    } else if (activeSubLevel === 1) {
-      setTrafficRates({ N: 0, S: 0, E: base, W: base });
-    } else {
-      setTrafficRates({ N: base, S: base, E: base, W: base });
-    }
-  }, [activeSubLevel, isMobilePortrait]);
+    const closed = currentLevel?.closedLanes || [];
+    
+    setTrafficRates({
+      N: closed.some(id => id.startsWith('nb-')) ? 0 : base,
+      S: closed.some(id => id.startsWith('sb-')) ? 0 : base,
+      E: closed.some(id => id.startsWith('eb-')) ? 0 : base,
+      W: closed.some(id => id.startsWith('wb-')) ? 0 : base
+    });
+  }, [activeSubLevel]);
   const cycleCounterRef = useRef(0);
   
   // Interpreter State
-  const [programCode, setProgramCode] = useState<string>(`phase(1): # North/South Priority
-    NORTH_STRAIGHT.GO
-    SOUTH_STRAIGHT.GO
-    NORTH_RIGHT.GO
-    SOUTH_RIGHT.GO
-    # Lefts yield to oncoming thru traffic
-    NORTH_LEFT.YIELD
-    SOUTH_LEFT.YIELD
-
-phase(2): # East/West Priority
-    EAST_STRAIGHT.GO
-    WEST_STRAIGHT.GO
-    EAST_RIGHT.GO
-    WEST_RIGHT.GO
-    # Lefts yield to oncoming thru traffic
-    EAST_LEFT.YIELD
-    WEST_LEFT.YIELD
-
-
-phase(3): # Protected Lefts
-    NORTH_LEFT.GO
-    SOUTH_LEFT.GO
-    # Usually you allow right turns from the side streets here too
-    EAST_RIGHT.GO
-    WEST_RIGHT.GO
-
-phase(4): # Flip to the other direction
-    EAST_LEFT.GO
-    WEST_LEFT.GO
-    NORTH_RIGHT.GO
-    SOUTH_RIGHT.GO
-`);
+  const [programCode, setProgramCode] = useState<string>('');
   const [compiledPhases, setCompiledPhases] = useState<Phase[]>([]);
   const [compiledRules, setCompiledRules] = useState<ConditionalRule[]>([]);
   const [injectedPhase, setInjectedPhase] = useState<PhaseCommand[] | null>(null);
@@ -903,8 +864,10 @@ phase(4): # Flip to the other direction
 
   const compile = useCallback((codeToCompile?: string) => {
     const code = codeToCompile ?? programCode;
-    const result = parseTrafficProgram(code);
+    const constraints = level1Briefing[activeSubLevel]?.constraints;
+    const result = parseTrafficProgram(code, constraints);
     if (result.error) {
+      if (programError !== result.error) hapticError();
       setProgramError(result.error);
       setCompiledPhases([]);
       setCompiledRules([]);
@@ -939,7 +902,7 @@ phase(4): # Flip to the other direction
     skipConditionalAfterInjectRef.current = false;
     setLightState('RED');
     setTimer(0);
-  }, [programCode]);
+  }, [programCode, activeSubLevel]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -990,15 +953,85 @@ phase(4): # Flip to the other direction
     setLogs(prev => [{ id: Math.random().toString(), time, event, color }, ...prev].slice(0, 20));
   }, []);
 
-  const resetSimulation = useCallback((reason: 'MANUAL' | 'CRASH') => {
+  useEffect(() => {
+    if (!isPlaying || crashInfo) return;
+
+    const cycleLength = Array.from({ length: compiledPhases.length > 0 ? compiledPhases.length : 4 }, (_, i) => phaseTimings[i] ?? DEFAULT_PHASE_GREEN_SECONDS).reduce((a, b) => a + b, 0);
+    if (cycleLength > MAX_TOTAL_LOOP_SECONDS) {
+      setIsPlaying(false);
+      isPlayingRef.current = false;
+      setCrashInfo({ x: 0, y: 0, laneA: '', laneB: '', vehicleIds: ['', ''], type: 'OVERHEAT' });
+      addLog('SYSTEM OVERHEAT: CYCLE LIMIT EXCEEDED', 'var(--red)');
+      hapticCrash();
+      return;
+    }
+
+    for (const q of Object.values(offScreenQueues)) {
+      if (q > 15) {
+        setIsPlaying(false);
+        isPlayingRef.current = false;
+        setCrashInfo({ x: 0, y: 0, laneA: '', laneB: '', vehicleIds: ['', ''], type: 'OVERFLOW' });
+        addLog('GRID LOCK DETECTED', 'var(--red)');
+        hapticCrash();
+        return;
+      }
+    }
+  }, [isPlaying, crashInfo, phaseTimings, offScreenQueues, compiledPhases.length, addLog]);
+
+  useEffect(() => {
+    const currentLevel = level1Briefing[activeSubLevel];
+    if (
+      currentLevel && 
+      currentLevel.winCondition && 
+      sessionCarsCleared >= currentLevel.winCondition.clearCars && 
+      (!currentLevel.winCondition.minPerDirection || 
+        Object.entries(sessionCarsByDir).every(([dir, count]) => {
+          const isClosed = currentLevel.closedLanes?.some(id => id.startsWith(dir.toLowerCase()));
+          return isClosed || count >= (currentLevel.winCondition.minPerDirection || 0);
+        })
+      ) &&
+      !crashInfo && 
+      !levelCompleteInfo &&
+      !isFreeplay &&
+      isPlaying
+    ) {
+      setIsPlaying(false);
+      isPlayingRef.current = false;
+      const linesOfCode = programCode.split('\n').filter(l => l.trim().length > 0 && !l.trim().startsWith('//')).length;
+      const phasesCount = (programCode.match(/phase\(/g) || []).length;
+      const conditionalsCount = (programCode.match(/if\s*\(/g) || []).length;
+      const hardwareCost = (phasesCount * 10) + (conditionalsCount * 50);
+      const secondsToClear = sessionTime;
+      
+      setLevelCompleteInfo({
+        carsCleared: sessionCarsCleared,
+        timeSeconds: sessionTime,
+        cycleTime: secondsToClear,
+        linesOfCode: linesOfCode,
+        hardwareCost
+      });
+      
+      saveSolution(currentLevel.id, programCode);
+      saveHighscore(currentLevel.id, { secondsToClear, instructionCount: linesOfCode, hardwareCost });
+      if (activeSubLevel + 1 < level1Briefing.length) {
+        unlockLevel(activeSubLevel + 1);
+      }
+    }
+  }, [sessionCarsCleared, sessionCarsByDir, activeSubLevel, crashInfo, isPlaying, levelCompleteInfo, programCode, sessionTime, isFreeplay]);
+
+  const resetSimulation = useCallback((reason: 'MANUAL' | 'CRASH', autoPlay: boolean = false) => {
     vehiclesRef.current = [];
     heatMapRef.current.fill(0);
     skidMarksRef.current = [];
     previousRearTiresRef.current = {};
     crashDetectedRef.current = false;
     setCrashInfo(null);
+    setLevelCompleteInfo(null);
+    setIsFreeplay(false);
     setIsCrashModalMinimized(false);
     setOffScreenQueues({});
+    setSessionCarsCleared(0);
+                  setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
     setInjectedPhase(null);
     skipConditionalAfterInjectRef.current = false;
     setCurrentPhase(0);
@@ -1006,8 +1039,8 @@ phase(4): # Flip to the other direction
     setTimer(0);
     inspectPaintRef.current = null;
     setInspectPanel(null);
-    isPlayingRef.current = true;
-    setIsPlaying(true);
+    isPlayingRef.current = autoPlay;
+    setIsPlaying(autoPlay);
     addLog(reason === 'CRASH' ? 'CRASH RESET' : 'MANUAL RESET', reason === 'CRASH' ? 'var(--red)' : 'var(--minor)');
   }, [addLog]);
 
@@ -1058,6 +1091,7 @@ phase(4): # Flip to the other direction
     setActiveSubLevel(idx);
     setProgramCode(level1Briefing[idx].initialCode);
     setSessionCarsCleared(0);
+    setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
     setSessionCrashes(0);
     setSessionTime(0);
     resetSimulation('MANUAL');
@@ -1256,13 +1290,10 @@ phase(4): # Flip to the other direction
       if (cycleCounterRef.current % 2 === 0) {
         setTrafficRates(prev => {
           const next = { ...prev };
-          const mask = briefingSpawnMaskRef.current;
+          const closed = level1Briefing[activeSubLevel]?.closedLanes || [];
           Object.keys(next).forEach(dir => {
-            if (mask === 'EW' && (dir === 'E' || dir === 'W')) {
-              next[dir] = 0;
-              return;
-            }
-            if (mask === 'NS' && (dir === 'N' || dir === 'S')) {
+            const isClosed = closed.some(id => id.startsWith(dir.toLowerCase() + 'b-'));
+            if (isClosed) {
               next[dir] = 0;
               return;
             }
@@ -1307,7 +1338,7 @@ phase(4): # Flip to the other direction
       });
     }
 
-  }, [currentPhase, lightState, isAdaptive, isPlaying, offScreenQueues, compiledPhases]);
+  }, [currentPhase, lightState, isAdaptive, isPlaying, offScreenQueues, compiledPhases, activeSubLevel]);
 
   // Record History for Charts
   useEffect(() => {
@@ -1412,7 +1443,9 @@ phase(4): # Flip to the other direction
       setOffScreenQueues(prev => {
         const next = { ...prev };
         let changed = false;
+        const currentLevel = level1Briefing[activeSubLevel];
         LANES.forEach(lane => {
+          if (currentLevel?.closedLanes?.includes(lane.id)) return;
           const rate = trafficRates[lane.direction];
           // If random roll succeeds, add a car to this lane's queue
           if (Math.random() < rate) {
@@ -1424,7 +1457,7 @@ phase(4): # Flip to the other direction
       });
     }, 500 / timeScale);
     return () => clearInterval(interval);
-  }, [isPlaying, trafficRates, timeScale]);
+  }, [isPlaying, trafficRates, timeScale, activeSubLevel]);
 
   // 2. QUEUE DRAINER / SPAWNER (CONSUMER)
   // This is the ONLY place where cars are spawned onto the canvas.
@@ -1435,6 +1468,7 @@ phase(4): # Flip to the other direction
       setOffScreenQueues(prev => {
         const next = { ...prev };
         let changed = false;
+        const currentLevel = level1Briefing[activeSubLevel];
         const laneCars = new Map<string, Vehicle[]>();
         vehiclesRef.current.forEach(v => {
           let arr = laneCars.get(v.laneId);
@@ -1446,6 +1480,7 @@ phase(4): # Flip to the other direction
         });
         
         LANES.forEach(lane => {
+          if (currentLevel?.closedLanes?.includes(lane.id)) return;
           // Only attempt to spawn if there's a backlog
           if (next[lane.id] > 0) {
             const carsInLane = laneCars.get(lane.id) || [];
@@ -1516,6 +1551,7 @@ phase(4): # Flip to the other direction
                 cruiseSpeed: cruiseSpeed,
                 startDelay: 0.1 + Math.random() * 0.3,
                 spawnAtMs: performance.now(),
+                originDir: lane.direction,
               };
 
               vehiclesRef.current.push(newVehicle);
@@ -1528,7 +1564,7 @@ phase(4): # Flip to the other direction
       });
     }, 150 / timeScale);
     return () => clearInterval(interval);
-  }, [isPlaying, timeScale]);
+  }, [isPlaying, timeScale, activeSubLevel]);
 
   const update = useCallback((time: number, simStep: number) => {
     const u = loopUpdateSectionsRef.current;
@@ -1816,17 +1852,25 @@ phase(4): # Flip to the other direction
 
     let validCount = 0;
     let newlyCleared = 0;
+    const newlyClearedDirs: Record<string, number> = { N: 0, S: 0, E: 0, W: 0 };
     for (let i = 0; i < vehicles.length; i++) {
       const v = vehicles[i];
       if (v.x >= -50 && v.x <= CANVAS_SIZE + 50 && v.y >= -50 && v.y <= CANVAS_SIZE + 50) {
         vehicles[validCount++] = v;
       } else {
         newlyCleared++;
+        newlyClearedDirs[v.originDir]++;
       }
     }
     vehicles.length = validCount;
     if (newlyCleared > 0) {
       setSessionCarsCleared(prev => prev + newlyCleared);
+      setSessionCarsByDir(prev => ({
+        N: prev.N + newlyClearedDirs.N,
+        S: prev.S + newlyClearedDirs.S,
+        E: prev.E + newlyClearedDirs.E,
+        W: prev.W + newlyClearedDirs.W,
+      }));
     }
     const filteredRearTires: Record<string, RearTires> = {};
     for (let i = 0; i < vehicles.length; i++) {
@@ -1869,12 +1913,23 @@ phase(4): # Flip to the other direction
     const centerX = CANVAS_SIZE / 2;
     const centerY = CANVAS_SIZE / 2;
 
+    const currentLevel = level1Briefing[activeSubLevel];
+    const closedDirections = new Set<string>();
+    if (currentLevel?.closedLanes) {
+      currentLevel.closedLanes.forEach(laneId => {
+        if (laneId.startsWith('nb-')) closedDirections.add('N');
+        if (laneId.startsWith('sb-')) closedDirections.add('S');
+        if (laneId.startsWith('eb-')) closedDirections.add('E');
+        if (laneId.startsWith('wb-')) closedDirections.add('W');
+      });
+    }
+
     const drawBgGlyphLayer = (c: CanvasRenderingContext2D) => {
       const drawRoadArrow = (x: number, y: number, angle: number, icon: string) => {
         c.save();
         c.translate(x, y);
         c.rotate(angle);
-        c.fillStyle = '#B8C0CC';
+        c.fillStyle = 'rgba(88, 166, 255, 0.3)';
         c.font = '700 24px "Material Symbols Outlined"';
         c.textAlign = 'center';
         c.textBaseline = 'middle';
@@ -1883,17 +1938,17 @@ phase(4): # Flip to the other direction
       };
 
       const drawStaticLabel = (label: string, x: number, y: number) => {
-        c.fillStyle = '#FFFFFF';
+        c.fillStyle = 'rgba(88, 166, 255, 0.6)';
         c.textAlign = 'left';
         c.textBaseline = 'top';
-        c.font = 'bold 12px "JetBrains Mono"';
+        c.font = 'bold 10px "JetBrains Mono"';
         c.fillText(label, x, y);
       };
 
-      drawStaticLabel('NORTHBOUND', centerX + INTERSECTION_SIZE / 2 + 20, CANVAS_SIZE - 60);
-      drawStaticLabel('SOUTHBOUND', centerX - INTERSECTION_SIZE / 2 - 140, 40);
-      drawStaticLabel('EASTBOUND', 40, centerY + INTERSECTION_SIZE / 2 + 20);
-      drawStaticLabel('WESTBOUND', CANVAS_SIZE - 160, centerY - INTERSECTION_SIZE / 2 - 40);
+      drawStaticLabel('APP_N_01 [INBOUND]', centerX + INTERSECTION_SIZE / 2 + 20, CANVAS_SIZE - 60);
+      drawStaticLabel('APP_S_01 [INBOUND]', centerX - INTERSECTION_SIZE / 2 - 140, 40);
+      drawStaticLabel('APP_E_01 [INBOUND]', 40, centerY + INTERSECTION_SIZE / 2 + 20);
+      drawStaticLabel('APP_W_01 [INBOUND]', CANVAS_SIZE - 160, centerY - INTERSECTION_SIZE / 2 - 40);
 
       drawRoadArrow(centerX + 20, centerY + 170, 0, 'turn_left');
       drawRoadArrow(centerX + 60, centerY + 170, 0, 'arrow_upward');
@@ -1909,7 +1964,81 @@ phase(4): # Flip to the other direction
       drawRoadArrow(centerX + 170, centerY - 100, -Math.PI/2, 'turn_right');
     };
 
-    ctx.fillStyle = '#1A1D23';
+    ctx.fillStyle = '#0D0F12';
+    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+    // Blueprint Grid Overlay
+    ctx.strokeStyle = 'rgba(88, 166, 255, 0.05)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= CANVAS_SIZE; i += 20) {
+      ctx.moveTo(i, 0); ctx.lineTo(i, CANVAS_SIZE);
+      ctx.moveTo(0, i); ctx.lineTo(CANVAS_SIZE, i);
+    }
+    ctx.stroke();
+    
+    // Major Grid Lines
+    ctx.strokeStyle = 'rgba(88, 166, 255, 0.1)';
+    ctx.beginPath();
+    for (let i = 0; i <= CANVAS_SIZE; i += 100) {
+      ctx.moveTo(i, 0); ctx.lineTo(i, CANVAS_SIZE);
+      ctx.moveTo(0, i); ctx.lineTo(CANVAS_SIZE, i);
+    }
+    ctx.stroke();
+
+    const drawConstructionCone = (x: number, y: number) => {
+      ctx.save();
+      ctx.translate(x, y);
+      
+      // Base
+      ctx.fillStyle = '#FF6B00';
+      ctx.beginPath();
+      ctx.moveTo(-6, 6);
+      ctx.lineTo(6, 6);
+      ctx.lineTo(5, 4);
+      ctx.lineTo(-5, 4);
+      ctx.closePath();
+      ctx.fill();
+
+      // Body
+      ctx.beginPath();
+      ctx.moveTo(-4, 4);
+      ctx.lineTo(4, 4);
+      ctx.lineTo(1, -8);
+      ctx.lineTo(-1, -8);
+      ctx.closePath();
+      ctx.fill();
+
+      // White stripe
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(-2, -2, 4, 3);
+      
+      ctx.restore();
+    };
+
+    if (currentLevel?.closedLanes) {
+      currentLevel.closedLanes.forEach(laneId => {
+        const lane = LANE_MAP.get(laneId);
+        if (!lane) return;
+        
+        // Draw 3 cones in a row across the lane near the stop line
+        for (let i = -1; i <= 1; i++) {
+          let coneX = lane.startX;
+          let coneY = lane.startY;
+          
+          if (lane.direction === 'N' || lane.direction === 'S') {
+            coneX = lane.startX + i * (LANE_WIDTH / 3);
+            coneY = lane.direction === 'N' ? centerY + STOP_LINE + 10 : centerY - STOP_LINE - 10;
+          } else {
+            coneX = lane.direction === 'E' ? centerX - STOP_LINE - 10 : centerX + STOP_LINE + 10;
+            coneY = lane.startY + i * (LANE_WIDTH / 3);
+          }
+          drawConstructionCone(coneX, coneY);
+        }
+      });
+    }
+
+    ctx.fillStyle = 'rgba(26, 29, 35, 0.5)';
     ctx.fillRect(centerX - INTERSECTION_SIZE / 2, 0, INTERSECTION_SIZE, CANVAS_SIZE);
     ctx.fillRect(0, centerY - INTERSECTION_SIZE / 2, CANVAS_SIZE, INTERSECTION_SIZE);
     ctx.fillStyle = '#0D0F12';
@@ -2210,30 +2339,46 @@ phase(4): # Flip to the other direction
         ctx.restore();
     };
 
-    drawCrosswalk(Movement.CROSSWALK_NORTH, centerX, centerY - INTERSECTION_SIZE / 2 - 15, true);
-    drawCrosswalk(Movement.CROSSWALK_SOUTH, centerX, centerY + INTERSECTION_SIZE / 2 + 15, true);
-    drawCrosswalk(Movement.CROSSWALK_EAST, centerX + INTERSECTION_SIZE / 2 + 15, centerY, false);
-    drawCrosswalk(Movement.CROSSWALK_WEST, centerX - INTERSECTION_SIZE / 2 - 15, centerY, false);
+    if (!closedDirections.has('N')) {
+      drawCrosswalk(Movement.CROSSWALK_NORTH, centerX, centerY - INTERSECTION_SIZE / 2 - 15, true);
+    }
+    if (!closedDirections.has('S')) {
+      drawCrosswalk(Movement.CROSSWALK_SOUTH, centerX, centerY + INTERSECTION_SIZE / 2 + 15, true);
+    }
+    if (!closedDirections.has('E')) {
+      drawCrosswalk(Movement.CROSSWALK_EAST, centerX + INTERSECTION_SIZE / 2 + 15, centerY, false);
+    }
+    if (!closedDirections.has('W')) {
+      drawCrosswalk(Movement.CROSSWALK_WEST, centerX - INTERSECTION_SIZE / 2 - 15, centerY, false);
+    }
 
     // 4. Signal Lights (Top Layer)
-    drawSignal(centerX + 100, centerY + 130, 0, [Movement.NORTHBOUND_RIGHT]);
-    drawSignal(centerX + 60, centerY + 130, 0, [Movement.NORTHBOUND_STRAIGHT]);
-    drawSignal(centerX + 20, centerY + 130, 0, [Movement.NORTHBOUND_LEFT], true);
+    if (!closedDirections.has('N')) {
+      drawSignal(centerX + 100, centerY + 130, 0, [Movement.NORTHBOUND_RIGHT]);
+      drawSignal(centerX + 60, centerY + 130, 0, [Movement.NORTHBOUND_STRAIGHT]);
+      drawSignal(centerX + 20, centerY + 130, 0, [Movement.NORTHBOUND_LEFT], true);
+    }
     
-    drawSignal(centerX - 100, centerY - 130, Math.PI, [Movement.SOUTHBOUND_RIGHT]);
-    drawSignal(centerX - 60, centerY - 130, Math.PI, [Movement.SOUTHBOUND_STRAIGHT]);
-    drawSignal(centerX - 20, centerY - 130, Math.PI, [Movement.SOUTHBOUND_LEFT], true);
+    if (!closedDirections.has('S')) {
+      drawSignal(centerX - 100, centerY - 130, Math.PI, [Movement.SOUTHBOUND_RIGHT]);
+      drawSignal(centerX - 60, centerY - 130, Math.PI, [Movement.SOUTHBOUND_STRAIGHT]);
+      drawSignal(centerX - 20, centerY - 130, Math.PI, [Movement.SOUTHBOUND_LEFT], true);
+    }
     
-    drawSignal(centerX - 130, centerY + 100, -Math.PI/2, [Movement.EASTBOUND_RIGHT]);
-    drawSignal(centerX - 130, centerY + 60, -Math.PI/2, [Movement.EASTBOUND_STRAIGHT]);
-    drawSignal(centerX - 130, centerY + 20, -Math.PI/2, [Movement.EASTBOUND_LEFT], true);
+    if (!closedDirections.has('E')) {
+      drawSignal(centerX - 130, centerY + 100, -Math.PI/2, [Movement.EASTBOUND_RIGHT]);
+      drawSignal(centerX - 130, centerY + 60, -Math.PI/2, [Movement.EASTBOUND_STRAIGHT]);
+      drawSignal(centerX - 130, centerY + 20, -Math.PI/2, [Movement.EASTBOUND_LEFT], true);
+    }
     
-    drawSignal(centerX + 130, centerY - 100, Math.PI/2, [Movement.WESTBOUND_RIGHT]);
-    drawSignal(centerX + 130, centerY - 60, Math.PI/2, [Movement.WESTBOUND_STRAIGHT]);
-    drawSignal(centerX + 130, centerY - 20, Math.PI/2, [Movement.WESTBOUND_LEFT], true);
+    if (!closedDirections.has('W')) {
+      drawSignal(centerX + 130, centerY - 100, Math.PI/2, [Movement.WESTBOUND_RIGHT]);
+      drawSignal(centerX + 130, centerY - 60, Math.PI/2, [Movement.WESTBOUND_STRAIGHT]);
+      drawSignal(centerX + 130, centerY - 20, Math.PI/2, [Movement.WESTBOUND_LEFT], true);
+    }
     d.chrome = performance.now() - md;
 
-  }, [activeMovements, lightState, offScreenQueues, bgFontsReady, showHeatmap, yieldMovements, crashInfo]);
+  }, [activeMovements, lightState, offScreenQueues, bgFontsReady, showHeatmap, yieldMovements, crashInfo, activeSubLevel]);
 
   const updateRef = useRef(update);
   updateRef.current = update;
@@ -2323,10 +2468,8 @@ phase(4): # Flip to the other direction
     setPhaseTimings((prev) => {
       const sc = compiledPhases.length > 0 ? compiledPhases.length : 4;
       const next = Array.from({ length: sc }, (_, i) => prev[i] ?? DEFAULT_PHASE_GREEN_SECONDS);
-      const sumOthers = next.reduce((a, v, j) => (j === phaseIndex ? a : a + v), 0);
-      const cap = MAX_TOTAL_LOOP_SECONDS - sumOthers;
-      next[phaseIndex] = Math.max(MIN_PHASE_GREEN_SECONDS, Math.min(val, cap));
-      return clampPhaseTimingsToLoopCap(next, sc);
+      next[phaseIndex] = Math.max(MIN_PHASE_GREEN_SECONDS, val);
+      return next;
     });
   };
 
@@ -2361,8 +2504,8 @@ phase(4): # Flip to the other direction
 
   const enterGameFromIntro = useCallback(() => {
     setIntroPhase(null);
-    isPlayingRef.current = true;
-    setIsPlaying(true);
+    isPlayingRef.current = false;
+    setIsPlaying(false);
   }, []);
 
   const returnToMainMenu = useCallback(() => {
@@ -2443,6 +2586,57 @@ phase(4): # Flip to the other direction
     const cr = canvas.getBoundingClientRect();
     const px = ((e.clientX - cr.left) / cr.width) * CANVAS_SIZE;
     const py = ((e.clientY - cr.top) / cr.height) * CANVAS_SIZE;
+
+    if (wiringPhaseIndex !== null) {
+      let closestLane: Lane | null = null;
+      let minDistance = 20;
+
+      for (const lane of LANES) {
+        const A = px - lane.startX;
+        const B = py - lane.startY;
+        const C = lane.endX - lane.startX;
+        const D = lane.endY - lane.startY;
+        const dot = A * C + B * D;
+        const lenSq = C * C + D * D;
+        let param = -1;
+        if (lenSq !== 0) param = dot / lenSq;
+        
+        let xx, yy;
+        if (param < 0) { xx = lane.startX; yy = lane.startY; }
+        else if (param > 1) { xx = lane.endX; yy = lane.endY; }
+        else { xx = lane.startX + param * C; yy = lane.startY + param * D; }
+        
+        const dx = px - xx;
+        const dy = py - yy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        if (dist < minDistance) {
+          minDistance = dist;
+          closestLane = lane;
+        }
+      }
+
+      if (closestLane) {
+        const dirStr = closestLane.direction === 'N' ? 'NORTH' : closestLane.direction === 'S' ? 'SOUTH' : closestLane.direction === 'E' ? 'EAST' : 'WEST';
+        const typeStr = closestLane.type === 'THRU' ? 'STRAIGHT' : closestLane.type;
+        const instruction = `    ${dirStr}_${typeStr}.GO`;
+        
+        setProgramCode(prev => {
+          const lines = prev.split('\n');
+          let targetLine = wiringPhaseIndex + 1;
+          while (targetLine < lines.length && !lines[targetLine].trim().startsWith('phase(') && !lines[targetLine].trim().startsWith('if ')) {
+            targetLine++;
+          }
+          lines.splice(targetLine, 0, instruction);
+          return lines.join('\n');
+        });
+        hapticHeavy();
+        addLog('WIRING LINKED', 'var(--green)');
+      }
+      setWiringPhaseIndex(null);
+      return;
+    }
+
     const picked = pickVehicleAtCanvasPoint(px, py, vehiclesRef.current);
     const mr = mainEl.getBoundingClientRect();
     const panelW = 268;
@@ -2495,14 +2689,10 @@ phase(4): # Flip to the other direction
   const sidebarColumnWidth = sidebarCollapsed ? 0 : sidebarWidth;
 
   const engineeringTemplateBlurb = useMemo(() => {
-    const preset = PHASE_TEMPLATES.find(t => t.code === programCode);
-    if (preset) {
-      return { title: `${preset.shortLabel} — ${preset.name.toUpperCase()}`, body: preset.detail };
-    }
     if (userTemplate && programCode === userTemplate) {
       return { title: 'CUSTOM', body: 'Phase program stored on this device. Save from the editor to refresh the stored copy.' };
     }
-    return { title: 'PROGRAM', body: 'Current text does not match a preset. Select CUSTOM or a template to load a defined program.' };
+    return { title: '', body: '' };
   }, [programCode, userTemplate]);
 
   if (introPhase !== null) {
@@ -2531,8 +2721,15 @@ phase(4): # Flip to the other direction
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
-              onClick={returnToMainMenu}
+              onClick={() => setIsManualOpen(true)}
               className="rounded border border-[#2D333B] px-2 py-1 text-[9px] font-mono font-bold text-[#8B949E] hover:border-[#3FB950]/50 hover:text-[#3FB950] transition-colors"
+            >
+              MANUAL
+            </button>
+            <button
+              type="button"
+              onClick={returnToMainMenu}
+              className="rounded border border-[#2D333B] px-2 py-1 text-[9px] font-mono font-bold text-[#8B949E] hover:border-[#F85149]/50 hover:text-[#F85149] transition-colors"
             >
               MENU
             </button>
@@ -2544,13 +2741,15 @@ phase(4): # Flip to the other direction
 
         <div ref={mobileSplitHostRef} className="flex-1 min-h-0 relative">
           <div className={`absolute inset-0 z-30 transition-opacity duration-300 ${mobileScreen === 'briefing' ? 'opacity-100 bg-[#0D0F12]' : 'opacity-0 pointer-events-none'}`}>
-            <BriefingTab 
-              level={level1Briefing[activeSubLevel] || level1Briefing[0]} 
-              activeSubLevel={activeSubLevel} 
+            <LevelSelect 
+              levels={level1Briefing} 
+              activeLevelIndex={activeSubLevel} 
+              unlockedLevels={unlockedLevels}
               onSelectLevel={(idx) => {
                 setActiveSubLevel(idx);
                 setProgramCode(level1Briefing[idx].initialCode);
                 setSessionCarsCleared(0);
+                  setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
                 setSessionCrashes(0);
                 setSessionTime(0);
                 resetSimulation('MANUAL');
@@ -2560,16 +2759,13 @@ phase(4): # Flip to the other direction
 
           <main 
             ref={simMainRef}
-            style={{ height: mobileScreen !== 'briefing' ? `${100 - mobileSplitHeight}%` : '100%' }}
-            className={`absolute left-0 top-0 w-full transition-all duration-500 ease-in-out flex flex-col items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]
+            className={`absolute left-0 top-0 w-full h-full transition-all duration-500 ease-in-out flex flex-col items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]
               ${mobileScreen !== 'briefing' ? 'border-b-2 border-[#2D333B] z-10' : 'z-0 opacity-0 pointer-events-none'}
             `}
           >
-            <div className="absolute bottom-2 left-0 w-full px-2 z-20 flex justify-between items-end pointer-events-none">
-              <div className="flex gap-2 pointer-events-auto">
-                <button onClick={togglePlayback} className={`p-2 rounded-none border shadow-xl ${isPlaying ? 'border-[#D29922]/60 bg-[#D29922]/15 text-[#D29922]' : 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950]'}`}>
-                  {isPlaying ? <Pause size={16} /> : <Play size={16} />}
-                </button>
+            <div className="absolute top-2 left-0 w-full px-2 z-20 flex justify-between items-start pointer-events-none">
+              <div className="flex gap-2 pointer-events-auto items-center">
+                <MasterSwitch isOn={isPlaying} onToggle={togglePlayback} />
                 {TIME_SCALE_OPTIONS.map((s) => (
                   <button
                     key={s}
@@ -2584,11 +2780,6 @@ phase(4): # Flip to the other direction
                     {s}x
                   </button>
                 ))}
-              </div>
-              <div className="flex flex-col gap-2 pointer-events-auto">
-                <button onClick={() => setZoom((z) => Math.min(3, z + ZOOM_STEP))} className="p-1.5 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group" title="Zoom In"><Plus size={16} /></button>
-                <button onClick={() => setZoom((z) => Math.max(0.5, z - ZOOM_STEP))} className="p-1.5 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group" title="Zoom Out"><Minus size={16} /></button>
-                <button onClick={() => { setZoom(0.8); setPan({ x: 0, y: 0 }); }} className="py-1 px-1 bg-[#1A1D23] border border-[#2D333B] rounded-none text-[10px] font-mono text-[#8B949E] hover:text-white transition-all shadow-xl">RST</button>
               </div>
             </div>
             <canvas 
@@ -2611,13 +2802,13 @@ phase(4): # Flip to the other direction
           >
             {mobileScreen !== 'briefing' && (
               <div 
-                className="w-full h-4 bg-[#1A1D23] border-t border-[#2D333B] flex items-center justify-center shrink-0 cursor-row-resize touch-none z-30"
+                className="w-full h-8 bg-[#1A1D23] border-t border-[#2D333B] shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.2)] flex items-center justify-center shrink-0 cursor-row-resize touch-none z-30 relative"
                 onPointerDown={(e) => {
                   isDraggingMobileSplitRef.current = true;
                   (e.target as Element).setPointerCapture(e.pointerId);
                 }}
               >
-                <div className="w-12 h-1 bg-[#8B949E] rounded-full opacity-50" />
+                <div className="w-16 h-1.5 bg-[#C9D1D9] rounded-full opacity-60" />
               </div>
             )}
             
@@ -2683,27 +2874,19 @@ phase(4): # Flip to the other direction
                         >
                           <Save size={14} />
                         </button>
-                        <div className="w-[1px] h-5 bg-[#2D333B] mx-1" />
-                        {PHASE_TEMPLATES.map((t) => (
-                          <button
-                            key={t.name}
-                            onClick={() => applyTemplate(t.code)}
-                            className={`flex-1 text-[10px] py-1.5 rounded-none font-mono border transition-all ${programCode === t.code ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}
-                          >
-                            {t.shortLabel}
-                          </button>
-                        ))}
                       </div>
                       <div className="flex flex-col gap-1">
                         <div className="text-[10px] text-[#56D364] font-mono uppercase tracking-wide leading-tight">{engineeringTemplateBlurb.title}</div>
                         <div className="text-[10px] text-[#b7bdc8] font-mono leading-snug">{engineeringTemplateBlurb.body}</div>
                       </div>
                       <div className="flex min-h-0 flex-1 flex-col">
-                        <MobileOmniCorpEditor
+                        <MobileEditor
                           programCode={programCode}
                           setProgramCode={setProgramCode}
+                          closedLanes={level1Briefing[activeSubLevel]?.closedLanes}
                           appendPhase={appendPhase}
                           deleteLastLine={deleteLastLine}
+                          activePhaseIndex={currentPhase}
                         />
                       </div>
                       {programError && (
@@ -2716,19 +2899,22 @@ phase(4): # Flip to the other direction
                           onClick={() => {
                             hapticHeavy();
                             compile();
-                            addLog('PROGRAM UPDATED', 'var(--green)');
+                            addLog('FIRMWARE COMPILED', 'var(--green)');
                             if (!programError) {
                               setSessionCarsCleared(0);
+                                            setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
                               setSessionCrashes(0);
                               setSessionTime(0);
                               setZoom(0.8);
                               isPlayingRef.current = true;
                               setIsPlaying(true);
+                              // --- ADD THIS LINE: Force switch to telemetry dashboard ---
+                              setMobileScreen('metrics');
                             }
                           }}
-                          className="w-full text-[14px] bg-[#3FB950]/20 text-[#3FB950] py-3 border-2 border-[#3FB950] rounded-none font-bold uppercase tracking-wider shadow-[0_0_15px_rgba(63,185,80,0.15)]"
+                          className="w-full text-[14px] bg-[#3FB950]/10 text-[#3FB950] py-3 border-y-2 border-[#3FB950] font-bold uppercase tracking-[0.2em] shadow-[inset_0_0_20px_rgba(63,185,80,0.1)] hover:bg-[#3FB950]/20 transition-colors"
                         >
-                          COMPILE & RUN
+                          [ EXECUTE FIRMWARE ]
                         </button>
                       </div>
                     </div>
@@ -2790,29 +2976,47 @@ phase(4): # Flip to the other direction
 
         <AnimatePresence>
           {crashInfo && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-              <div className="w-full max-w-sm rounded-none border-2 border-[#F85149] bg-[#1A1D23] p-6 shadow-[0_0_30px_rgba(248,81,73,0.3)]">
-                <div className="text-center">
-                  <div className="text-[11px] font-mono tracking-[0.2em] text-[#F85149]/80">INCIDENT</div>
-                  <h2 className="mt-2 text-2xl font-mono font-bold text-[#F85149]">CRASH DETECTED</h2>
-                  <div className="mt-4 rounded-none border border-[#2D333B] bg-black/40 px-3 py-2 text-left font-mono text-xs text-[#C9D1D9]">
-                    <div className="text-[#8B949E]">CRASHED LANES</div>
-                    <div className="mt-1 text-[#F85149]">{crashInfo.laneA.toUpperCase()} × {crashInfo.laneB.toUpperCase()}</div>
-                  </div>
-                  <div className="mt-5 flex flex-col gap-2">
-                    <button onClick={() => resetSimulation('CRASH')} className="w-full border-2 border-[#F85149] bg-[#F85149]/15 py-3 text-[13px] font-mono font-bold text-[#F85149] uppercase">RESET SIMULATION</button>
-                    {executionSplitActive && (
-                      <button onClick={() => { resetSimulation('CRASH'); setExecutionSplitActive(false); setMobileScreen('logic'); }} className="w-full border-2 border-[#2D333B] bg-black/20 py-2 text-[11px] font-mono text-[#C9D1D9] uppercase">RETURN TO EDITOR</button>
-                    )}
-                  </div>
-                </div>
-              </div>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-50 flex items-center justify-center bg-red-900/40 backdrop-blur-sm p-4 mix-blend-hard-light pointer-events-none">
             </motion.div>
           )}
-        </AnimatePresence>
-      </div>
-    );
-  }
+          {levelCompleteInfo && (
+            <LevelCompleteModal 
+              info={levelCompleteInfo}
+              levelId={level1Briefing[activeSubLevel]?.id}
+              isLastLevel={activeSubLevel === level1Briefing.length - 1}
+              onNext={() => {
+                if (activeSubLevel === level1Briefing.length - 1) {
+                  setIsFreeplay(true);
+                  setLevelCompleteInfo(null);
+                  setIsPlaying(true);
+                  isPlayingRef.current = true;
+                } else {
+                  const nextIdx = Math.min(activeSubLevel + 1, level1Briefing.length - 1);
+                  setActiveSubLevel(nextIdx);
+                  setProgramCode(level1Briefing[nextIdx].initialCode);
+                  setSessionCarsCleared(0);
+                  setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
+                  setSessionCrashes(0);
+                  setSessionTime(0);
+                  resetSimulation('MANUAL');
+                  setMobileScreen('briefing');
+                }
+              }}
+              onRetry={() => {
+                resetSimulation('MANUAL');
+                setMobileScreen('logic');
+                setSessionCarsCleared(0);
+                  setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
+                setSessionCrashes(0);
+                setSessionTime(0);
+              }}
+            />
+          )}
+      </AnimatePresence>
+      <ManualOverlay isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
+    </div>
+  );
+}
 
   return (
     <div
@@ -2834,8 +3038,15 @@ phase(4): # Flip to the other direction
           <span className="bg-[#3FB950]/10 text-[#3FB950] px-2 py-0.5 rounded border border-[#3FB950] text-[11px] shrink-0">OPERATIONAL</span>
           <button
             type="button"
-            onClick={returnToMainMenu}
+            onClick={() => setIsManualOpen(true)}
             className="shrink-0 rounded border border-[#2D333B] px-2.5 py-1 text-[10px] font-mono font-bold text-[#8B949E] hover:border-[#3FB950]/50 hover:text-[#3FB950] transition-colors"
+          >
+            MANUAL
+          </button>
+          <button
+            type="button"
+            onClick={returnToMainMenu}
+            className="shrink-0 rounded border border-[#2D333B] px-2.5 py-1 text-[10px] font-mono font-bold text-[#8B949E] hover:border-[#F85149]/50 hover:text-[#F85149] transition-colors"
           >
             MENU
           </button>
@@ -2930,23 +3141,6 @@ phase(4): # Flip to the other direction
           </div>
         </CollapsibleSection>
 
-        <CollapsibleSection id="load" title="TRAFFIC LOAD" isCollapsed={collapsed.load} onToggle={toggleCollapsed}>
-          <div className="bg-black/20 border border-[#2D333B] p-3 rounded flex flex-col gap-1">
-             <div className="text-[10px] uppercase text-[#8B949E] tracking-wider">NETWORK DENSITY</div>
-             <div className="text-2xl font-mono text-[#D29922]">
-               {vehiclesRef.current.length.toString().padStart(2, '0')}
-               <span className="text-[10px] text-[#8B949E] ml-2">ON_ROAD</span>
-             </div>
-             <div className="text-lg font-mono text-[#D29922]/70 -mt-1">
-               {Object.values(offScreenQueues).reduce((a, b) => a + b, 0).toString().padStart(2, '0')}
-               <span className="text-[9px] text-[#8B949E] ml-2 uppercase">WAITING</span>
-             </div>
-             <div className="text-[10px] text-[#8B949E] font-mono uppercase mt-1 px-1.5 py-0.5 bg-black/40 rounded border border-[#2D333B]/50 w-fit">
-                {vehiclesRef.current.length > 20 ? 'CONGESTION_HIGH' : vehiclesRef.current.length > 10 ? 'CONGESTION_MID' : 'NOMINAL_FLOW'}
-             </div>
-          </div>
-        </CollapsibleSection>
-
         <CollapsibleSection id="editor" title="PHASE SEQUENCE" isCollapsed={collapsed.editor} onToggle={toggleCollapsed}>
           <div className="flex flex-col gap-2">
             <div className="flex flex-col gap-1 mb-2">
@@ -2965,20 +3159,6 @@ phase(4): # Flip to the other direction
                 >
                   <Save size={12} />
                 </button>
-                <div className="w-[1px] h-4 bg-[#2D333B] mx-0.5" />
-                {PHASE_TEMPLATES.map((t) => {
-                  const isActive = programCode === t.code;
-                  return (
-                    <button 
-                      key={t.name}
-                      onClick={() => applyTemplate(t.code)}
-                      className={`flex-1 text-[10px] py-1 rounded font-mono border transition-all ${isActive ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]' : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5'}`}
-                      title={t.name}
-                    >
-                      {t.shortLabel}
-                    </button>
-                  );
-                })}
               </div>
             </div>
             <div className="flex items-center justify-between">
@@ -3109,10 +3289,7 @@ phase(4): # Flip to the other direction
                 const label =
                   compiledPhases.length > 0 ? compiledPhases[i].label : `PHASE_${i + 1}`;
                 const sec = phaseTimings[i] ?? DEFAULT_PHASE_GREEN_SECONDS;
-                const sliderMax = Math.max(
-                  MIN_PHASE_GREEN_SECONDS,
-                  MAX_TOTAL_LOOP_SECONDS - (cycleLength - sec),
-                );
+                const sliderMax = MAX_TOTAL_LOOP_SECONDS;
                 return (
                   <div key={`${label}-${i}`} className="pb-2 border-b border-[#2D333B]/40 last:border-0">
                     <div className="flex justify-between items-center mb-1 px-0.5 gap-2">
@@ -3137,25 +3314,42 @@ phase(4): # Flip to the other direction
           </div>
         </CollapsibleSection>
 
-        <CollapsibleSection id="queue" title="CONGESTION ANALYTICS" isCollapsed={collapsed.queue} onToggle={toggleCollapsed}>
-            <QueueChart history={queueHistory} />
-        </CollapsibleSection>
-
-        <CollapsibleSection id="analytics" title="PHASE METRICS" isCollapsed={collapsed.analytics} onToggle={toggleCollapsed}>
-            <AnalyticalChart history={timingHistory} />
-        </CollapsibleSection>
-
-        <CollapsibleSection id="log" title="PHASE LOG" isCollapsed={collapsed.log} onToggle={toggleCollapsed}>
-          <PhaseLogList logs={logs} maxHeightClass="h-64" />
+        <CollapsibleSection id="telemetry" title="TELEMETRY" isCollapsed={collapsed.telemetry} onToggle={toggleCollapsed}>
+          <div className="flex flex-col gap-4">
+            <div className="bg-black/20 border border-[#2D333B] p-3 rounded flex flex-col gap-1">
+               <div className="text-[10px] uppercase text-[#8B949E] tracking-wider">NETWORK DENSITY</div>
+               <div className="text-2xl font-mono text-[#D29922]">
+                 {vehiclesRef.current.length.toString().padStart(2, '0')}
+                 <span className="text-[10px] text-[#8B949E] ml-2">ON_ROAD</span>
+               </div>
+               <div className="text-lg font-mono text-[#D29922]/70 -mt-1">
+                 {Object.values(offScreenQueues).reduce((a, b) => a + b, 0).toString().padStart(2, '0')}
+                 <span className="text-[9px] text-[#8B949E] ml-2 uppercase">WAITING</span>
+               </div>
+               <div className="text-[10px] text-[#8B949E] font-mono uppercase mt-1 px-1.5 py-0.5 bg-black/40 rounded border border-[#2D333B]/50 w-fit">
+                  {vehiclesRef.current.length > 20 ? 'CONGESTION_HIGH' : vehiclesRef.current.length > 10 ? 'CONGESTION_MID' : 'NOMINAL_FLOW'}
+               </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-[#8B949E] tracking-wider mb-2">CONGESTION ANALYTICS</div>
+              <QueueChart history={queueHistory} />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-[#8B949E] tracking-wider mb-2">PHASE METRICS</div>
+              <AnalyticalChart history={timingHistory} />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-[#8B949E] tracking-wider mb-2">PHASE LOG</div>
+              <PhaseLogList logs={logs} maxHeightClass="max-h-64" />
+            </div>
+          </div>
         </CollapsibleSection>
 
         <div className="mt-auto space-y-4 pt-4 border-t border-[#2D333B]">
-          <button 
-            onClick={togglePlayback}
-            className={`w-full py-2 rounded text-[13px] font-bold transition-all border ${isPlaying ? 'bg-[#D29922]/10 border-[#D29922] text-[#D29922]' : 'bg-[#3FB950]/10 border-[#3FB950] text-[#3FB950]'}`}
-          >
-            {isPlaying ? 'PAUSE SYSTEM' : 'RESUME SYSTEM'}
-          </button>
+          <div className="flex justify-between items-center w-full py-2 px-3 rounded bg-black/20 border border-[#2D333B]">
+            <span className="text-[#8B949E] text-[11px] font-bold tracking-widest font-mono">MASTER PWR</span>
+            <MasterSwitch isOn={isPlaying} onToggle={togglePlayback} />
+          </div>
           <button 
             onClick={() => resetSimulation('MANUAL')}
             className="w-full py-2 rounded text-[13px] font-bold border border-[#2D333B] text-[#C9D1D9] hover:bg-white/5"
@@ -3180,18 +3374,7 @@ phase(4): # Flip to the other direction
         )}
         <div className="absolute top-6 right-6 z-20 flex flex-row items-start gap-2">
           <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={togglePlayback}
-              className={`flex min-h-[2.5rem] min-w-[3rem] items-center justify-center rounded border p-2 shadow-xl transition-all ${
-                isPlaying
-                  ? 'border-[#D29922]/60 bg-[#D29922]/15 text-[#D29922] hover:border-[#D29922]'
-                  : 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950] hover:border-[#3FB950]'
-              }`}
-              title={isPlaying ? 'Pause simulation' : 'Resume simulation'}
-            >
-              {isPlaying ? <Pause size={18} /> : <Play size={18} />}
-            </button>
+            <MasterSwitch isOn={isPlaying} onToggle={togglePlayback} />
             {TIME_SCALE_OPTIONS.map((s) => (
               <button
                 key={s}
@@ -3207,31 +3390,6 @@ phase(4): # Flip to the other direction
                 {s}x
               </button>
             ))}
-          </div>
-          <div className="flex flex-col gap-2">
-            <button
-              onClick={() => setZoom((z) => Math.min(3, z + ZOOM_STEP))}
-              className="p-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
-              title="Zoom In"
-            >
-              <Plus size={18} />
-            </button>
-            <button
-              onClick={() => setZoom((z) => Math.max(0.5, z - ZOOM_STEP))}
-              className="p-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[#C9D1D9] hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-all shadow-xl group"
-              title="Zoom Out"
-            >
-              <Minus size={18} />
-            </button>
-            <button
-              onClick={() => {
-                setZoom(defaultZoom());
-                setPan({ x: 0, y: 0 });
-              }}
-              className="py-1 px-2 bg-[#1A1D23] border border-[#2D333B] rounded text-[10px] font-mono text-[#8B949E] hover:text-white transition-all shadow-xl"
-            >
-              RESET
-            </button>
           </div>
         </div>
         <div className="flex items-center justify-center w-full h-full overflow-hidden">
@@ -3259,79 +3417,50 @@ phase(4): # Flip to the other direction
           </div>
         )}
         <AnimatePresence>
-          {crashInfo && !isCrashModalMinimized && (
+          {crashInfo && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 z-40 flex items-center justify-center bg-black/70"
+              className="absolute inset-0 z-40 flex items-center justify-center bg-red-900/40 mix-blend-hard-light pointer-events-none"
             >
-              <motion.div
-                initial={{ scale: 0.94, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.94, opacity: 0 }}
-                className="w-[min(92vw,420px)] rounded border border-[#F85149]/60 bg-[#1A1D23] p-6 shadow-2xl"
-              >
-                <div className="text-center">
-                  <div className="text-[11px] font-mono tracking-[0.2em] text-[#F85149]/80">INCIDENT</div>
-                  <h2 className="mt-2 text-2xl font-mono font-bold text-[#F85149]">CRASH DETECTED</h2>
-                  <p className="mt-3 text-sm font-mono text-[#C9D1D9]">
-                    Conflicting movements entered the intersection.
-                  </p>
-                  <div className="mt-4 rounded border border-[#2D333B] bg-black/20 px-3 py-2 text-left font-mono text-xs text-[#C9D1D9]">
-                    <div className="text-[#8B949E]">CRASHED LANES</div>
-                    <div className="mt-1 text-[#F85149]">
-                      {crashInfo.laneA.toUpperCase()} × {crashInfo.laneB.toUpperCase()}
-                    </div>
-                  </div>
-                  <div className="mt-5 flex gap-2">
-                    <button
-                      onClick={() => setIsCrashModalMinimized(true)}
-                      className="flex-1 rounded border border-[#2D333B] bg-black/20 py-2 text-[13px] font-mono font-bold text-[#C9D1D9] hover:bg-white/5"
-                    >
-                      MINIMIZE
-                    </button>
-                    <button
-                      onClick={() => resetSimulation('CRASH')}
-                      className="flex-1 rounded border border-[#F85149] bg-[#F85149]/15 py-2 text-[13px] font-mono font-bold text-[#F85149] hover:bg-[#F85149]/25"
-                    >
-                      RESET SIMULATION
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
             </motion.div>
           )}
-          {crashInfo && isCrashModalMinimized && (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 8 }}
-              className="absolute bottom-6 right-6 z-40 w-[min(92vw,360px)] rounded border border-[#F85149]/60 bg-[#1A1D23]/95 p-3 shadow-2xl backdrop-blur"
-            >
-              <div className="text-[11px] font-mono tracking-[0.16em] text-[#F85149]/80">CRASH DETECTED</div>
-              <div className="mt-1 font-mono text-xs text-[#C9D1D9]">
-                {crashInfo.laneA.toUpperCase()} × {crashInfo.laneB.toUpperCase()}
-              </div>
-              <div className="mt-3 flex gap-2">
-                <button
-                  onClick={() => setIsCrashModalMinimized(false)}
-                  className="flex-1 rounded border border-[#2D333B] bg-black/20 py-1.5 text-[11px] font-mono font-bold text-[#C9D1D9] hover:bg-white/5"
-                >
-                  RESTORE
-                </button>
-                <button
-                  onClick={() => resetSimulation('CRASH')}
-                  className="flex-1 rounded border border-[#F85149] bg-[#F85149]/15 py-1.5 text-[11px] font-mono font-bold text-[#F85149] hover:bg-[#F85149]/25"
-                >
-                  RESET
-                </button>
-              </div>
-            </motion.div>
+          {levelCompleteInfo && (
+            <LevelCompleteModal 
+              info={levelCompleteInfo}
+              levelId={level1Briefing[activeSubLevel]?.id}
+              isLastLevel={activeSubLevel === level1Briefing.length - 1}
+              onNext={() => {
+                if (activeSubLevel === level1Briefing.length - 1) {
+                  setIsFreeplay(true);
+                  setLevelCompleteInfo(null);
+                  setIsPlaying(true);
+                  isPlayingRef.current = true;
+                } else {
+                  const nextIdx = Math.min(activeSubLevel + 1, level1Briefing.length - 1);
+                  setActiveSubLevel(nextIdx);
+                  setProgramCode(level1Briefing[nextIdx].initialCode);
+                  setSessionCarsCleared(0);
+                  setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
+                  setSessionCrashes(0);
+                  setSessionTime(0);
+                  resetSimulation('MANUAL');
+                }
+              }}
+              onRetry={() => {
+                resetSimulation('MANUAL');
+                setSessionCarsCleared(0);
+                  setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
+                setSessionCrashes(0);
+                setSessionTime(0);
+              }}
+            />
           )}
         </AnimatePresence>
       </main>
       <FirmwareUpdatePrompt />
+      <ManualOverlay isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
     </div>
   );
 }
