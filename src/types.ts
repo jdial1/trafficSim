@@ -1,4 +1,41 @@
 
+export interface BriefingContent {
+  id: string;
+  title: string;
+  from: string;
+  subject: string;
+  body: string;
+  bullets: string[];
+  hardware: string[];
+  initialCode: string;
+  winCondition: {
+    clearCars: number;
+    minPerDirection?: number;
+  };
+  closedLanes?: string[];
+  constraints?: {
+    maxPhases?: number;
+    noConditionals?: boolean;
+  };
+  trafficWeights?: {
+    N?: number;
+    S?: number;
+    E?: number;
+    W?: number;
+  };
+  failureConditions?: {
+    maxQueueLength?: number;
+    maxHardwareCost?: number;
+  };
+  instructionLimits?: {
+    forbiddenKeywords?: string[];
+    maxLines?: number;
+  };
+  randomSeed?: number;
+  nextLevelId?: string;
+  isSandbox?: boolean;
+}
+
 export enum Movement {
   NORTHBOUND_LEFT = 1,
   NORTHBOUND_STRAIGHT = 2,
@@ -69,3 +106,26 @@ export interface Lane {
   type: 'LEFT' | 'THRU' | 'RIGHT';
   movement: Movement;
 }
+
+export interface LogEntry {
+  id: string;
+  time: string;
+  event: string;
+  color?: string;
+}
+
+export interface HistoryEntry {
+  time: string;
+  P1: number;
+  P2: number;
+  P3: number;
+  P4: number;
+}
+
+export interface QueueHistoryEntry {
+  time: string;
+  [key: string]: string | number;
+}
+
+import levelData from './data/levels.json';
+export const level1Briefing: BriefingContent[] = levelData as BriefingContent[];

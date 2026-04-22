@@ -1,0 +1,273 @@
+[
+  {
+    "id": "1A",
+    "title": "1A: N/S FLOW",
+    "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
+    "subject": "DIRECTIVE 82-A: N/S AXIS ALIGNMENT",
+    "body": "Latency on SEC-082 N/S corridor exceeds acceptable thresholds. East/West sensors are temporarily disabled. Establish baseline throughput.",
+    "bullets": [
+      "Clear 150 vehicles.",
+      "Maintain N/S priority.",
+      "E/W lanes are strictly offline."
+    ],
+    "hardware": ["SEC-082 BASE LOGIC"],
+    "initialCode": "phase(1):\n    NORTH_STRAIGHT.GO\n    SOUTH_STRAIGHT.GO",
+    "winCondition": { "clearCars": 150, "minPerDirection": 50 },
+    "closedLanes": [
+      "eb-left",
+      "eb-thru",
+      "eb-right",
+      "wb-left",
+      "wb-thru",
+      "wb-right"
+    ],
+    "constraints": { "maxPhases": 2, "noConditionals": true },
+    "nextLevelId": "1B",
+    "randomSeed": 42
+  },
+  {
+    "id": "1B",
+    "title": "1B: E/W FLOW",
+    "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
+    "subject": "DIRECTIVE 82-B: E/W AXIS ALIGNMENT",
+    "body": "N/S sensors have been taken offline for diagnostics. East/West traffic is now backing up into the industrial district. Restore flow without exceeding cycle budget.",
+    "bullets": [
+      "Clear 250 vehicles.",
+      "Ensure both East and West axes are processed.",
+      "Failure: Gridlock detected.",
+      "Keep East and West traffic isolated to prevent incidents."
+    ],
+    "hardware": [
+      "SEC-082 BASE LOGIC CONTROLLER",
+      "E/W SENSOR ARRAY",
+      "MANUAL OVERRIDE SWITCH"
+    ],
+    "initialCode": "",
+    "winCondition": { "clearCars": 250, "minPerDirection": 75 },
+    "closedLanes": [
+      "nb-left",
+      "nb-thru",
+      "nb-right",
+      "sb-left",
+      "sb-thru",
+      "sb-right"
+    ],
+    "constraints": { "maxPhases": 2, "noConditionals": true },
+    "nextLevelId": "1C",
+    "randomSeed": 1337
+  },
+  {
+    "id": "1C",
+    "title": "1C: FULL INTEGRATION",
+    "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
+    "subject": "DIRECTIVE 82-C: FULL OPERATION",
+    "body": "Diagnostics complete. All sensors on SEC-082 are active. Congestion is critical. Design a 4-phase cycle to process all directions efficiently. Do not exceed the 60-tick cycle overheat limit.",
+    "bullets": [
+      "Clear 250 vehicles.",
+      "Ensure all four axes maintain minimum flow.",
+      "Failure: Gridlock detected.",
+      "Isolate conflicting movements into discrete phases."
+    ],
+    "hardware": [
+      "SEC-082 MULTIPLEX CONTROLLER",
+      "FULL SENSOR ARRAY",
+      "PHASE SEQUENCER"
+    ],
+    "initialCode": "",
+    "winCondition": { "clearCars": 250, "minPerDirection": 75 },
+    "constraints": { "maxPhases": 4, "noConditionals": true },
+    "nextLevelId": "1D",
+    "randomSeed": 2048
+  },
+  {
+    "id": "1D",
+    "title": "1D: PROTECTED LEFTS",
+    "from": "GOS-SAFETY DIVISION <safety@bot.gov>",
+    "subject": "DIRECTIVE 82-D: LEFT TURN CONFLICT",
+    "body": "Collision data suggests Northbound drivers are failing to yield. Implement a dedicated Left-Turn phase to isolate them from Southbound oncoming traffic.",
+    "bullets": [
+      "Clear 200 vehicles.",
+      "Ensure North-Left and South-Left have dedicated time.",
+      "Avoid head-on collisions."
+    ],
+    "hardware": ["SEC-082 PHASE SEQUENCER"],
+    "initialCode": "phase(1):\n    NORTH_STRAIGHT.GO\n    SOUTH_STRAIGHT.GO\n\nphase(2):\n    # Add Left Turn Logic here",
+    "winCondition": { "clearCars": 200, "minPerDirection": 25 },
+    "closedLanes": [
+      "eb-left",
+      "eb-thru",
+      "eb-right",
+      "wb-left",
+      "wb-thru",
+      "wb-right"
+    ],
+    "constraints": { "maxPhases": 4, "noConditionals": true },
+    "nextLevelId": "2A",
+    "randomSeed": 1001
+  },
+  {
+    "id": "2A",
+    "title": "2A: THE RUSH HOUR",
+    "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
+    "subject": "DIRECTIVE 83-A: ASYMMETRIC LOAD",
+    "body": "Morning commute in effect. Northbound volume is 3x higher than other directions. Adjust phase timings to favor the heavy load.",
+    "bullets": [
+      "Clear 300 vehicles.",
+      "Handle high-density Northbound flow.",
+      "Do not allow Southbound to stall."
+    ],
+    "hardware": ["SEC-082 TRAFFIC ANALYZER"],
+    "initialCode": "",
+    "winCondition": { "clearCars": 300, "minPerDirection": 25 },
+    "trafficWeights": { "N": 0.08, "S": 0.02, "E": 0.02, "W": 0.02 },
+    "constraints": { "maxPhases": 4, "noConditionals": true },
+    "nextLevelId": "2B",
+    "randomSeed": 2001
+  },
+  {
+    "id": "2B",
+    "title": "2B: INDUSTRIAL REPAIR",
+    "from": "CITY MAINTENANCE <maint@bot.gov>",
+    "subject": "DIRECTIVE 83-B: THRU-LANE CLOSURE",
+    "body": "Utility repairs have blocked all 'Straight' lanes on the East/West axis. Only turning movements are possible. Route vehicles through side streets.",
+    "bullets": [
+      "Clear 200 vehicles.",
+      "Only Left and Right turns are active for E/W.",
+      "Gridlock is a high risk."
+    ],
+    "hardware": ["SEC-082 RE-ROUTING MODULE"],
+    "initialCode": "",
+    "winCondition": { "clearCars": 200 },
+    "closedLanes": ["eb-thru", "wb-thru"],
+    "constraints": { "maxPhases": 4, "noConditionals": true },
+    "nextLevelId": "2C",
+    "randomSeed": 2002
+  },
+  {
+    "id": "2C",
+    "title": "2C: THE PEDESTRIAN BRIDGE",
+    "from": "CITIZEN SAFETY COUNCIL <council@bot.gov>",
+    "subject": "DIRECTIVE 83-C: CROSSWALK PRIORITY",
+    "body": "The local schools are out. High pedestrian volume requires a dedicated 'All-Walk' phase where all vehicle movement is halted.",
+    "bullets": [
+      "Clear 250 vehicles.",
+      "Use EXCLUSIVE_PEDESTRIAN_PHASE.",
+      "Achieve throughput despite pedestrian delays."
+    ],
+    "hardware": ["SEC-082 CROSSWALK CONTROLLER"],
+    "initialCode": "phase(1):\n    EXCLUSIVE_PEDESTRIAN_PHASE.GO",
+    "winCondition": { "clearCars": 250, "minPerDirection": 50 },
+    "constraints": { "maxPhases": 6, "noConditionals": true },
+    "nextLevelId": "3A",
+    "randomSeed": 2003
+  },
+  {
+    "id": "3A",
+    "title": "3A: PERMISSIVE FLOW",
+    "from": "ENGINEERING DEPT <eng@bot.gov>",
+    "subject": "DIRECTIVE 84-A: THE YIELD PROTOCOL",
+    "body": "Efficiency is low. Instead of strict green lights, use .YIELD commands for right turns and left turns to allow movement during gaps in traffic.",
+    "bullets": [
+      "Clear 300 vehicles.",
+      "Utilize .YIELD for at least two movements.",
+      "Reduce average wait time."
+    ],
+    "hardware": ["SEC-082 LOGIC GATE v2"],
+    "initialCode": "phase(1):\n    NORTH_STRAIGHT.GO\n    SOUTH_STRAIGHT.GO\n    NORTH_RIGHT.YIELD",
+    "winCondition": { "clearCars": 300 },
+    "constraints": { "maxPhases": 4, "noConditionals": true },
+    "nextLevelId": "3B",
+    "randomSeed": 3001
+  },
+  {
+    "id": "3B",
+    "title": "3B: SENSOR ACTIVATION",
+    "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
+    "subject": "DIRECTIVE 84-B: DYNAMIC ROUTING",
+    "body": "Your hardware has been upgraded with queue sensors. Use 'if' statements to trigger special phases only when specific lanes are backed up.",
+    "bullets": [
+      "Clear 350 vehicles.",
+      "Use if(QUEUE.NORTH_LEFT > 5) logic.",
+      "Reduce hardware overheating by minimizing active phases."
+    ],
+    "hardware": ["SEC-082 SENSOR INTERFACE"],
+    "initialCode": "if (QUEUE.NORTH_LEFT > 5):\n    phase_insert(NORTH_LEFT.GO)",
+    "winCondition": { "clearCars": 350 },
+    "constraints": { "maxPhases": 4, "noConditionals": false },
+    "nextLevelId": "3C",
+    "randomSeed": 3002
+  },
+  {
+    "id": "3C",
+    "title": "3C: THE SPLIT PHASE",
+    "from": "GOS-SAFETY DIVISION <safety@bot.gov>",
+    "subject": "DIRECTIVE 84-C: HEAVY TRUCK CORRIDOR",
+    "body": "Large trucks from the West are causing accidents when turning. Implement a 'Split Phase' where West goes entirely (Left, Straight, Right) followed by East.",
+    "bullets": [
+      "Clear 250 vehicles.",
+      "Isolate WB flow from EB flow entirely.",
+      "No concurrent E/W movement allowed."
+    ],
+    "hardware": ["SEC-082 HEAVY DUTY RELAYS"],
+    "initialCode": "",
+    "winCondition": { "clearCars": 250, "minPerDirection": 50 },
+    "constraints": { "maxPhases": 6, "noConditionals": false },
+    "nextLevelId": "4A",
+    "randomSeed": 3003
+  },
+  {
+    "id": "4A",
+    "title": "4A: THE DIAMOND",
+    "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
+    "subject": "DIRECTIVE 85-A: 8-PHASE CHALLENGE",
+    "body": "Critical congestion. All lanes are active. All volumes are high. You must design a perfect 8-phase rotation or the system will crash from overflow.",
+    "bullets": [
+      "Clear 500 vehicles.",
+      "Process all 12 movements.",
+      "System overflow will occur at 15 vehicles in queue."
+    ],
+    "hardware": ["SEC-082 MULTIPLEXER"],
+    "initialCode": "",
+    "winCondition": { "clearCars": 500, "minPerDirection": 75 },
+    "constraints": { "maxPhases": 8, "noConditionals": false },
+    "nextLevelId": "4B",
+    "randomSeed": 4001
+  },
+  {
+    "id": "4B",
+    "title": "4B: EMERGENCY CORRIDOR",
+    "from": "GOS-SAFETY DIVISION <safety@bot.gov>",
+    "subject": "DIRECTIVE 85-B: HOSPITAL ACCESS",
+    "body": "The Southbound corridor is now an emergency route. It must remain clear. Use sensors to purge Southbound queues the moment they exceed 2 vehicles.",
+    "bullets": [
+      "Clear 400 vehicles.",
+      "Priority: SOUTH_STRAIGHT.",
+      "Southbound queue must stay below 5 at all times."
+    ],
+    "hardware": ["SEC-082 PRIORITY OVERRIDE"],
+    "initialCode": "",
+    "winCondition": { "clearCars": 400 },
+    "trafficWeights": { "N": 0.03, "S": 0.08, "E": 0.03, "W": 0.03 },
+    "constraints": { "maxPhases": 4, "noConditionals": false },
+    "nextLevelId": "sandbox",
+    "randomSeed": 4002
+  },
+  {
+    "id": "sandbox",
+    "title": "SANDBOX",
+    "from": "METROCORP ENGINEERING <eng@metrocorp.gov>",
+    "subject": "SEC-082 SIMULATION ENVIRONMENT",
+    "body": "Freeplay environment enabled. All sensors and overrides are unlocked. Use this simulation to test various traffic profiles.",
+    "bullets": [
+      "No win condition.",
+      "Adjust traffic flow manually."
+    ],
+    "hardware": [
+      "DEVELOPMENT KIT",
+      "UNRESTRICTED SENSORS"
+    ],
+    "initialCode": "",
+    "winCondition": { "clearCars": 0 },
+    "isSandbox": true
+  }
+]

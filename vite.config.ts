@@ -47,6 +47,8 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
+      port: 8080,
+      host: '0.0.0.0',
       hmr: process.env.DISABLE_HMR !== 'true',
     },
   };

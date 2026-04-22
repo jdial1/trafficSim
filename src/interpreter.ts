@@ -1,23 +1,7 @@
 import { Movement } from './types';
+import keywordData from './data/keywords.json';
 
-export const KEYWORD_MAP: Record<string, Movement> = {
-  NORTH_LEFT: Movement.NORTHBOUND_LEFT,
-  NORTH_STRAIGHT: Movement.NORTHBOUND_STRAIGHT,
-  NORTH_RIGHT: Movement.NORTHBOUND_RIGHT,
-  WEST_LEFT: Movement.WESTBOUND_LEFT,
-  WEST_STRAIGHT: Movement.WESTBOUND_STRAIGHT,
-  WEST_RIGHT: Movement.WESTBOUND_RIGHT,
-  SOUTH_LEFT: Movement.SOUTHBOUND_LEFT,
-  SOUTH_STRAIGHT: Movement.SOUTHBOUND_STRAIGHT,
-  SOUTH_RIGHT: Movement.SOUTHBOUND_RIGHT,
-  EAST_LEFT: Movement.EASTBOUND_LEFT,
-  EAST_STRAIGHT: Movement.EASTBOUND_STRAIGHT,
-  EAST_RIGHT: Movement.EASTBOUND_RIGHT,
-  CROSSWALK_NORTH: Movement.CROSSWALK_NORTH,
-  CROSSWALK_SOUTH: Movement.CROSSWALK_SOUTH,
-  CROSSWALK_EAST: Movement.CROSSWALK_EAST,
-  CROSSWALK_WEST: Movement.CROSSWALK_WEST,
-};
+export const KEYWORD_MAP: Record<string, Movement> = keywordData as any;
 
 export interface PhaseCommand {
   target: Movement;

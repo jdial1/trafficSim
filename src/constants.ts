@@ -1,23 +1,20 @@
 
 import { Movement, Lane } from './types';
+import intersectionData from './data/intersection.json';
 
-export const CANVAS_SIZE = 800;
-export const INTERSECTION_SIZE = 240;
-export const LANE_WIDTH = 40;
+export const CANVAS_SIZE = intersectionData.canvasSize;
+export const INTERSECTION_SIZE = intersectionData.intersectionSize;
+export const LANE_WIDTH = intersectionData.laneWidth;
 
-export const DEFAULT_TIMINGS = {
-  green: 10,
-  yellow: 2,
-  allRed: 1,
-};
+export const DEFAULT_TIMINGS = intersectionData.defaultTimings;
 
 export const DEFAULT_PHASE_GREEN_SECONDS = 10;
 
 export const PHASE_TEMPLATES: { shortLabel: string; name: string; detail: string; code: string; }[] = [];
 
-export const MIN_PHASE_GREEN_SECONDS = 5;
+export const MIN_PHASE_GREEN_SECONDS = intersectionData.minPhaseGreenSeconds;
 
-export const MAX_TOTAL_LOOP_SECONDS = 60;
+export const MAX_TOTAL_LOOP_SECONDS = intersectionData.maxTotalLoopSeconds;
 
 export const DEFAULT_BUILTIN_PHASE_TIMINGS: number[] = [15, 15, 10, 10];
 
@@ -28,32 +25,56 @@ export function clampPhaseTimingsToLoopCap(values: number[], phaseCount: number)
   return values.map(v => Math.max(MIN_PHASE_GREEN_SECONDS, Math.floor(v * factor)));
 }
 
-const CENTER = CANVAS_SIZE / 2;
+export const LANES: Lane[] = (intersectionData.lanes as any[]).map(l => ({
+  ...l,
+  type: l.type as 'LEFT' | 'THRU' | 'RIGHT',
+  direction: l.direction as 'N' | 'S' | 'E' | 'W',
+  movement: l.movement as Movement
+}));
 
-export const LANES: Lane[] = [
-  { id: 'nb-left', startX: CENTER + LANE_WIDTH / 2, startY: CANVAS_SIZE, endX: CENTER + LANE_WIDTH / 2, endY: 0, direction: 'N', type: 'LEFT', movement: Movement.NORTHBOUND_LEFT },
-  { id: 'nb-thru', startX: CENTER + LANE_WIDTH * 1.5, startY: CANVAS_SIZE, endX: CENTER + LANE_WIDTH * 1.5, endY: 0, direction: 'N', type: 'THRU', movement: Movement.NORTHBOUND_STRAIGHT },
-  { id: 'nb-right', startX: CENTER + LANE_WIDTH * 2.5, startY: CANVAS_SIZE, endX: CENTER + LANE_WIDTH * 2.5, endY: 0, direction: 'N', type: 'RIGHT', movement: Movement.NORTHBOUND_RIGHT },
+export const LANE_MAP = new Map<string, Lane>(LANES.map(l => [l.id, l]));
 
-  { id: 'sb-left', startX: CENTER - LANE_WIDTH / 2, startY: 0, endX: CENTER - LANE_WIDTH / 2, endY: CANVAS_SIZE, direction: 'S', type: 'LEFT', movement: Movement.SOUTHBOUND_LEFT },
-  { id: 'sb-thru', startX: CENTER - LANE_WIDTH * 1.5, startY: 0, endX: CENTER - LANE_WIDTH * 1.5, endY: CANVAS_SIZE, direction: 'S', type: 'THRU', movement: Movement.SOUTHBOUND_STRAIGHT },
-  { id: 'sb-right', startX: CENTER - LANE_WIDTH * 2.5, startY: 0, endX: CENTER - LANE_WIDTH * 2.5, endY: CANVAS_SIZE, direction: 'S', type: 'RIGHT', movement: Movement.SOUTHBOUND_RIGHT },
+export const LEFT_LANE_IDS = LANES.filter(l => l.type === 'LEFT').map(l => l.id);
 
-  { id: 'eb-left', startX: 0, startY: CENTER + LANE_WIDTH / 2, endX: CANVAS_SIZE, endY: CENTER + LANE_WIDTH / 2, direction: 'E', type: 'LEFT', movement: Movement.EASTBOUND_LEFT },
-  { id: 'eb-thru', startX: 0, startY: CENTER + LANE_WIDTH * 1.5, endX: CANVAS_SIZE, endY: CENTER + LANE_WIDTH * 1.5, direction: 'E', type: 'THRU', movement: Movement.EASTBOUND_STRAIGHT },
-  { id: 'eb-right', startX: 0, startY: CENTER + LANE_WIDTH * 2.5, endX: CANVAS_SIZE, endY: CENTER + LANE_WIDTH * 2.5, direction: 'E', type: 'RIGHT', movement: Movement.EASTBOUND_RIGHT },
+export const ADJACENT_RIGHT_MERGE_PAIR_KEYS = new Set([
+  'nb-thru|nb-right', 'sb-thru|sb-right', 'eb-thru|eb-right', 'wb-thru|wb-right'
+]);
 
-  { id: 'wb-left', startX: CANVAS_SIZE, startY: CENTER - LANE_WIDTH / 2, endX: 0, endY: CENTER - LANE_WIDTH / 2, direction: 'W', type: 'LEFT', movement: Movement.WESTBOUND_LEFT },
-  { id: 'wb-thru', startX: CANVAS_SIZE, startY: CENTER - LANE_WIDTH * 1.5, endX: 0, endY: CENTER - LANE_WIDTH * 1.5, direction: 'W', type: 'THRU', movement: Movement.WESTBOUND_STRAIGHT },
-  { id: 'wb-right', startX: CANVAS_SIZE, startY: CENTER - LANE_WIDTH * 2.5, endX: 0, endY: CENTER - LANE_WIDTH * 2.5, direction: 'W', type: 'RIGHT', movement: Movement.WESTBOUND_RIGHT },
-];
+export const ADJACENT_LEFT_MERGE_PAIR_KEYS = new Set([
+  'nb-thru|nb-left', 'sb-thru|sb-left', 'eb-thru|eb-left', 'wb-thru|wb-left'
+]);
 
-export const DIRECTION_TO_MOVEMENTS: Record<string, Movement[]> = {
-  'N': [Movement.NORTHBOUND_LEFT, Movement.NORTHBOUND_STRAIGHT, Movement.NORTHBOUND_RIGHT],
-  'S': [Movement.SOUTHBOUND_LEFT, Movement.SOUTHBOUND_STRAIGHT, Movement.SOUTHBOUND_RIGHT],
-  'E': [Movement.EASTBOUND_LEFT , Movement.EASTBOUND_STRAIGHT,  Movement.EASTBOUND_RIGHT],
-  'W': [Movement.WESTBOUND_LEFT , Movement.WESTBOUND_STRAIGHT,  Movement.WESTBOUND_RIGHT],
-};
+export const DIRECTION_TO_MOVEMENTS: Record<string, Movement[]> = intersectionData.directionToMovements as any;
 
-export const BASE_SPAWN_RATE = 0.0375;
-export const SPAWN_DRIFT_SPEED = 0.005;
+export const BASE_SPAWN_RATE = intersectionData.baseSpawnRate;
+export const SPAWN_DRIFT_SPEED = intersectionData.spawnDriftSpeed;
+
+export const STOP_LINE = intersectionData.stopLine;
+export const BASE_SAFE_GAP = intersectionData.baseSafeGap;
+export const VEHICLE_COLORS = intersectionData.vehicleColors;
+
+export const SIDEBAR_DEFAULT_WIDTH = intersectionData.sidebar.defaultWidth;
+export const SIDEBAR_MIN_WIDTH = intersectionData.sidebar.minWidth;
+export const SIDEBAR_MAX_WIDTH = intersectionData.sidebar.maxWidth;
+
+export const HEAT_GRID_COLS = intersectionData.heatmap.cols;
+export const HEAT_GRID_ROWS = intersectionData.heatmap.rows;
+export const HEATMAP_DECAY = intersectionData.heatmap.decay;
+export const HEATMAP_GAIN = intersectionData.heatmap.gain;
+export const HEATMAP_MAX = intersectionData.heatmap.max;
+
+export const SKID_MARK_BRAKE_THRESHOLD = intersectionData.skidMarks.brakeThreshold;
+export const SKID_MARK_TTL_MS = intersectionData.skidMarks.ttlMs;
+export const MAX_SKID_MARK_SEGMENTS = intersectionData.skidMarks.maxSegments;
+
+export const LOOP_LAG_LOG_MS = intersectionData.loop.lagLogMs;
+export const LOOP_HUD_MIN_INTERVAL_MS = intersectionData.loop.hudMinIntervalMs;
+export const MAX_SIM_INTEGRATION_STEP = intersectionData.loop.maxSimIntegrationStep;
+
+export const MOBILE_SPLIT_HANDLE_PX = intersectionData.mobile.splitHandlePx;
+export const MOBILE_COLLAPSED_STRIP_PX = intersectionData.mobile.collapsedStripPx;
+export const MOBILE_SPLIT_MAX_RATIO = intersectionData.mobile.splitMaxRatio;
+
+export const ZOOM_STEP = intersectionData.zoomStep;
+export const LEGENDARY_SPAWN_CHANCE = intersectionData.legendarySpawnChance;
+

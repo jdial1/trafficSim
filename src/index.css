@@ -15,7 +15,7 @@
   .crt-bezel {
     border-radius: 2rem;
     box-shadow: inset 0 0 100px rgba(0,0,0,0.8), 0 0 20px rgba(0,0,0,0.5);
-    animation: crt-flicker 0.15s infinite;
+    animation: crt-flicker 0.2s infinite;
   }
   .crt-bezel::after {
     content: " ";
@@ -44,15 +44,15 @@
 }
 
 @keyframes crt-flicker {
-  0% { opacity: 0.98; }
-  5% { opacity: 0.95; }
-  10% { opacity: 0.98; }
+  0% { opacity: 0.99; }
+  5% { opacity: 0.985; }
+  10% { opacity: 0.99; }
   15% { opacity: 1; }
-  50% { opacity: 0.98; }
-  60% { opacity: 0.96; }
-  70% { opacity: 0.98; }
+  50% { opacity: 0.99; }
+  60% { opacity: 0.985; }
+  70% { opacity: 0.99; }
   80% { opacity: 1; }
-  100% { opacity: 0.98; }
+  100% { opacity: 0.99; }
 }
 
 @theme {

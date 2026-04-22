@@ -1,0 +1,183 @@
+{
+  "canvasSize": 800,
+  "intersectionSize": 240,
+  "laneWidth": 40,
+  "defaultTimings": {
+    "green": 10,
+    "yellow": 2,
+    "allRed": 1
+  },
+  "minPhaseGreenSeconds": 5,
+  "maxTotalLoopSeconds": 60,
+  "baseSpawnRate": 0.0375,
+  "spawnDriftSpeed": 0.005,
+  "stopLine": 130,
+  "baseSafeGap": 25,
+  "vehicleColors": [
+    "#0366d6",
+    "#58A6FF",
+    "#3FB950",
+    "#ffcc00",
+    "#D29922",
+    "#f78166",
+    "#F85149"
+  ],
+  "sidebar": {
+    "defaultWidth": 280,
+    "minWidth": 220,
+    "maxWidth": 520
+  },
+  "heatmap": {
+    "cols": 48,
+    "rows": 48,
+    "decay": 0.985,
+    "gain": 0.28,
+    "max": 24
+  },
+  "skidMarks": {
+    "brakeThreshold": 0.8,
+    "ttlMs": 2800,
+    "maxSegments": 2400
+  },
+  "loop": {
+    "lagLogMs": 20,
+    "hudMinIntervalMs": 100,
+    "maxSimIntegrationStep": 1
+  },
+  "mobile": {
+    "splitHandlePx": 32,
+    "collapsedStripPx": 48,
+    "splitMaxRatio": 0.85,
+    "extraZoomSteps": 2
+  },
+  "zoomStep": 0.1,
+  "legendarySpawnChance": 0.001,
+  "lanes": [
+    {
+      "id": "nb-left",
+      "startX": 420,
+      "startY": 800,
+      "endX": 420,
+      "endY": 0,
+      "direction": "N",
+      "type": "LEFT",
+      "movement": 1
+    },
+    {
+      "id": "nb-thru",
+      "startX": 460,
+      "startY": 800,
+      "endX": 460,
+      "endY": 0,
+      "direction": "N",
+      "type": "THRU",
+      "movement": 2
+    },
+    {
+      "id": "nb-right",
+      "startX": 500,
+      "startY": 800,
+      "endX": 500,
+      "endY": 0,
+      "direction": "N",
+      "type": "RIGHT",
+      "movement": 3
+    },
+    {
+      "id": "sb-left",
+      "startX": 380,
+      "startY": 0,
+      "endX": 380,
+      "endY": 800,
+      "direction": "S",
+      "type": "LEFT",
+      "movement": 7
+    },
+    {
+      "id": "sb-thru",
+      "startX": 340,
+      "startY": 0,
+      "endX": 340,
+      "endY": 800,
+      "direction": "S",
+      "type": "THRU",
+      "movement": 8
+    },
+    {
+      "id": "sb-right",
+      "startX": 300,
+      "startY": 0,
+      "endX": 300,
+      "endY": 800,
+      "direction": "S",
+      "type": "RIGHT",
+      "movement": 9
+    },
+    {
+      "id": "eb-left",
+      "startX": 0,
+      "startY": 420,
+      "endX": 800,
+      "endY": 420,
+      "direction": "E",
+      "type": "LEFT",
+      "movement": 10
+    },
+    {
+      "id": "eb-thru",
+      "startX": 0,
+      "startY": 460,
+      "endX": 800,
+      "endY": 460,
+      "direction": "E",
+      "type": "THRU",
+      "movement": 11
+    },
+    {
+      "id": "eb-right",
+      "startX": 0,
+      "startY": 500,
+      "endX": 800,
+      "endY": 500,
+      "direction": "E",
+      "type": "RIGHT",
+      "movement": 12
+    },
+    {
+      "id": "wb-left",
+      "startX": 800,
+      "startY": 380,
+      "endX": 0,
+      "endY": 380,
+      "direction": "W",
+      "type": "LEFT",
+      "movement": 4
+    },
+    {
+      "id": "wb-thru",
+      "startX": 800,
+      "startY": 340,
+      "endX": 0,
+      "endY": 340,
+      "direction": "W",
+      "type": "THRU",
+      "movement": 5
+    },
+    {
+      "id": "wb-right",
+      "startX": 800,
+      "startY": 300,
+      "endX": 0,
+      "endY": 300,
+      "direction": "W",
+      "type": "RIGHT",
+      "movement": 6
+    }
+  ],
+  "directionToMovements": {
+    "N": [1, 2, 3],
+    "S": [7, 8, 9],
+    "E": [10, 11, 12],
+    "W": [4, 5, 6]
+  }
+}
