@@ -209,7 +209,10 @@ export const GameIntro = ({ phase, onDismissSplash, onEnterGame }: { phase: 'spl
   useEffect(() => { if (phase === 'splash' && postIndex < POST.length) { const t = setTimeout(() => setPostIndex(i => i + 1), 150 + Math.random() * 200); return () => clearTimeout(t); } }, [phase, postIndex]);
   
   const handleLogin = async () => {
-    const redirectTo = new URL(import.meta.env.BASE_URL, window.location.origin).href;
+    const fromEnv = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim();
+    const redirectTo = fromEnv
+      ? new URL(fromEnv).href
+      : new URL(import.meta.env.BASE_URL, window.location.origin).href;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo },
