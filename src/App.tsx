@@ -1,8 +1,20 @@
-import React from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronUp, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Plus, Minus, Trash2, Download, Mail, Terminal, Map as MapIcon } from 'lucide-react';
+import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronUp, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Plus, Minus, Trash2, Download, Mail, Terminal, Map as MapIcon, BookOpen, Menu } from 'lucide-react';
 import Editor from '@monaco-editor/react';
-import { VehicleInspectTooltip, TrafficFlowRates, BadgeView, CollapsibleSection, PhaseLogList, LevelCompleteModal, MasterSwitch, CrashModal } from './UI';
+import {
+  VehicleInspectTooltip,
+  TrafficFlowRates,
+  BadgeView,
+  CollapsibleSection,
+  PhaseLogList,
+  LevelCompleteModal,
+  MasterSwitch,
+  CrashModal,
+  ProgramCompileError,
+  IndustrialPanelKey,
+} from './UI';
+import { manualHelpTabForCompilerMessage } from './manualAppendix';
 import { AnalyticalChart, QueueChart } from './Charts';
 import { CTA, hudSiteTitle } from './branding';
 import { APP_BUILD_VERSION } from './generatedVersion';
@@ -10,7 +22,7 @@ import { Histogram, ManualOverlay, LevelSelect, GameIntro, FirmwareUpdatePrompt 
 import { level1Briefing } from './types';
 import { MobileEditor } from './MobileEditor';
 import { useTrafficSimulation } from './useTrafficSimulation';
-import { hapticHeavy, hapticCrash, hapticError, playThunk, startAtmosphericHum, stopAtmosphericHum, getMovementIcon, MovementLabels, getDirection, DIRECTIONS, TIME_SCALE_OPTIONS } from './traffic';
+import { hapticHeavy, hapticTap, hapticCrash, hapticError, playThunk, startAtmosphericHum, stopAtmosphericHum, getMovementIcon, MovementLabels, getDirection, DIRECTIONS, TIME_SCALE_OPTIONS } from './traffic';
 import { LANES, CANVAS_SIZE, MAX_TOTAL_LOOP_SECONDS, DEFAULT_PHASE_GREEN_SECONDS, MIN_PHASE_GREEN_SECONDS, INTERSECTION_SIZE, STOP_LINE, LANE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from './constants';
 
 export default function App() {
@@ -33,9 +45,18 @@ export default function App() {
     zoom, setZoom, pan, setPan, isDraggingCanvasRef, dragStartCanvasRef, panStartRef, hasDraggedRef,
     activePointersRef, pinchStartDistRef, pinchStartZoomRef, timeScale, setTimeScale, timeScaleRef,
     showHeatmap, setShowHeatmap, loopLastMs, setLoopLastMs, loopAvg10Ms, setLoopAvg10Ms, crashInfo, setCrashInfo,
+    incidentTape, incidentPlaybackIndex, setIncidentPlaybackIndex,
+    hardwareBudget,
     isCrashModalMinimized, setIsCrashModalMinimized, levelCompleteInfo, setLevelCompleteInfo,
     isOptimizing, setIsOptimizing, toasts, addToast,
-    isManualOpen, setIsManualOpen, installDeferred, isStandaloneDisplay, setIsStandaloneDisplay,
+    isManualOpen,
+    setIsManualOpen,
+    manualInitialTab,
+    openManual,
+    clearManualInitialTab,
+    installDeferred,
+    isStandaloneDisplay,
+    setIsStandaloneDisplay,
     cycleDemandRef, skipConditionalAfterInjectRef, cycleCounterRef,
     programCode, setProgramCode, compiledPhases, setCompiledPhases, compiledRules, setCompiledRules,
     injectedPhase, setInjectedPhase, programError, setProgramError, isEditMode, setIsEditMode,
@@ -51,6 +72,16 @@ export default function App() {
     phaseRowCount, cycleLength, sidebarColumnWidth, engineeringTemplateBlurb
   } = useTrafficSimulation();
 
+  const [eepromBurn, setEepromBurn] = useState<{ progress: number; line: string } | null>(null);
+  const burnTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (burnTimerRef.current != null) window.clearInterval(burnTimerRef.current);
+    };
+  }, []);
+
+  const procurementLocked = hardwareBudget.procurementBlocked && !currentLevel?.isSandbox;
+
   if (introPhase !== null) {
     return (
       <GameIntro
@@ -62,9 +93,7 @@ export default function App() {
   }
 
   const atMobileBottomMin =
-    mobileScreen !== 'briefing' &&
-    (mobileScreen === 'metrics' || mobileScreen === 'logic') &&
-    mobileSplitHeight <= mobileMinSplitPct + 1.5;
+    mobileScreen === 'metrics' && mobileSplitHeight <= mobileMinSplitPct + 1.5;
 
   const lastQueueEntry = queueHistory[queueHistory.length - 1];
   const totalCongestion = lastQueueEntry ? LANES.reduce((sum, lane) => sum + (lastQueueEntry[lane.id] as number || 0), 0) : 0;
@@ -90,20 +119,20 @@ export default function App() {
             <span className="text-[#C9D1D9] truncate">{hudSiteTitle(APP_BUILD_VERSION)}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setIsManualOpen(true)}
-              className="rounded border border-[#2D333B] px-2 py-1 text-[9px] font-mono font-bold text-[#8B949E] hover:border-[#3FB950]/50 hover:text-[#3FB950] transition-colors"
+            <IndustrialPanelKey
+              onClick={() => openManual()}
+              className="flex items-center gap-1 border-[#3FB950]/55 bg-[#3FB950]/12 px-2 py-1 text-[9px] text-[#7AE38A] hover:border-[#3FB950]/80 hover:bg-[#3FB950]/22 hover:text-[#B7F5C0]"
             >
+              <BookOpen size={12} className="shrink-0 text-[#3FB950]" strokeWidth={2.25} />
               MANUAL
-            </button>
-            <button
-              type="button"
+            </IndustrialPanelKey>
+            <IndustrialPanelKey
               onClick={returnToMainMenu}
-              className="rounded border border-[#2D333B] px-2 py-1 text-[9px] font-mono font-bold text-[#8B949E] hover:border-[#F85149]/50 hover:text-[#F85149] transition-colors"
+              className="flex items-center gap-1 border-[#F85149]/55 bg-[#F85149]/12 px-2 py-1 text-[9px] text-[#FF9A94] hover:border-[#F85149]/80 hover:bg-[#F85149]/22 hover:text-[#FFC8C5]"
             >
-              MENU
-            </button>
+              <Menu size={12} className="shrink-0 text-[#F85149]" strokeWidth={2.25} />
+              TERMINAL OUT
+            </IndustrialPanelKey>
             <div className="font-mono text-[10px] text-[#C9D1D9] text-right">
               {isPlaying ? 'ACTIVE' : 'PAUSED'} | CYCLE: {cycleLength}s
             </div>
@@ -125,17 +154,20 @@ export default function App() {
           <main 
             ref={simMainRef}
             className={`absolute left-0 top-0 w-full h-full transition-all duration-500 ease-in-out flex flex-col items-center justify-center overflow-hidden bg-[radial-gradient(#2D333B_1px,transparent_1px)] bg-[size:32px_32px]
-              ${mobileScreen !== 'briefing' ? 'border-b-2 border-[#2D333B] z-10' : 'z-0 opacity-0 pointer-events-none'}
+              ${mobileScreen === 'metrics' ? 'border-b-2 border-[#2D333B] z-10' : 'z-0 opacity-0 pointer-events-none'}
             `}
           >
             <div className="absolute top-2 left-0 w-full px-2 z-20 flex justify-between items-start pointer-events-none">
               <div className="flex gap-2 pointer-events-auto items-center">
-                <MasterSwitch isOn={isPlaying} onToggle={togglePlayback} />
+                <MasterSwitch isOn={isPlaying} onToggle={togglePlayback} procurementLock={procurementLocked} />
                 {TIME_SCALE_OPTIONS.map((s) => (
                   <button
                     key={s}
                     type="button"
-                    onClick={() => setTimeScale(s)}
+                    onClick={() => {
+                      hapticTap();
+                      setTimeScale(s);
+                    }}
                     className={`min-w-[2rem] py-1 px-1 rounded-none text-[10px] font-mono font-bold border transition-all shadow-xl ${
                       timeScale === s
                         ? 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950]'
@@ -162,10 +194,10 @@ export default function App() {
           </main>
 
           <div 
-            style={{ height: `${mobileSplitHeight}%` }}
+            style={{ height: mobileScreen === 'logic' ? '100%' : `${mobileSplitHeight}%` }}
             className={`absolute left-0 bottom-0 w-full z-20 bg-[#000000] flex flex-col min-h-0 overflow-hidden transition-transform duration-500 ease-in-out ${mobileScreen !== 'briefing' ? 'translate-y-0' : 'translate-y-[100%]'}`}
           >
-            {mobileScreen !== 'briefing' && (
+            {mobileScreen !== 'briefing' && mobileScreen !== 'logic' && (
               <div 
                 className="w-full h-8 bg-[#1A1D23] border-t border-[#2D333B] shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.2)] flex items-center justify-center shrink-0 cursor-row-resize touch-none z-30 relative"
                 onPointerDown={(e) => {
@@ -203,81 +235,87 @@ export default function App() {
             )}
             
             {mobileScreen === 'logic' && (
-              <>
-                {atMobileBottomMin ? (
-                  <div className="shrink-0 flex items-stretch gap-2 px-2 py-1 bg-[#1A1D23] border-b border-[#2D333B] min-h-[48px]">
-                    <div className="flex flex-col min-w-0 flex-1 justify-center gap-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[9px] font-mono font-bold text-[#3FB950] truncate max-w-[40%]">
-                          {compiledPhases[currentPhase]?.label || `PHASE_${currentPhase + 1}`}
-                        </span>
-                        <span className="text-[11px] font-mono text-[#3FB950] shrink-0">{timer.toFixed(1)}s</span>
-                        <span
-                          className={`text-[8px] font-bold px-1 py-0.5 rounded shrink-0 ${
-                            lightState === 'GREEN'
-                              ? 'bg-[#3FB950] text-[#0D0F12]'
-                              : lightState === 'YELLOW'
-                                ? 'bg-[#D29922] text-[#0D0F12]'
-                                : 'bg-[#F85149] text-[#0D0F12]'
-                          }`}
-                        >
-                          {lightState}
-                        </span>
-                        {isPlaying && (
-                          <span className="text-[8px] bg-[#3FB950] text-[#0D0F12] px-1 py-0.5 rounded font-bold shrink-0">ACTIVE</span>
+              <div className="flex-1 min-h-0 flex flex-col p-2 overflow-hidden">
+                <div className="flex flex-col gap-2 flex-1 min-h-0">
+                  <div className="flex flex-col gap-1 shrink-0">
+                    <div className="text-[10px] text-[#56D364] font-mono uppercase tracking-wide leading-tight">{engineeringTemplateBlurb.title}</div>
+                    <div className="text-[10px] text-[#b7bdc8] font-mono leading-snug">{engineeringTemplateBlurb.body}</div>
+                  </div>
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <MobileEditor
+                      programCode={programCode}
+                      setProgramCode={setProgramCode}
+                      closedLanes={(level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0]).closedLanes}
+                      appendPhase={appendPhase}
+                      deleteLastLine={deleteLastLine}
+                      activePhaseIndex={currentPhase}
+                      isPlaying={isPlaying}
+                      maxPhases={(level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0]).constraints?.maxPhases}
+                    />
+                  </div>
+                  <ProgramCompileError
+                    message={programError}
+                    helpTab={manualHelpTabForCompilerMessage(programError)}
+                    onOpenManualHelp={(tab) => openManual(tab)}
+                  />
+                  <div className="mt-auto space-y-2 pt-2 pb-2">
+                    {!currentLevel?.isSandbox && (
+                      <div className="rounded border border-[#30363d] bg-black/40 px-2 py-1.5 font-mono text-[9px] text-[#8B949E]">
+                        <div className="flex justify-between uppercase tracking-wider">
+                          <span>BOM meter</span>
+                          <span className={procurementLocked ? 'text-[#F85149]' : 'text-[#3FB950]'}>
+                            {hardwareBudget.rawBom} / {hardwareBudget.ceiling} ¥
+                          </span>
+                        </div>
+                        <div className="mt-1 h-1.5 w-full overflow-hidden rounded-sm bg-[#21262d]">
+                          <div
+                            className={`h-full ${procurementLocked ? 'bg-[#F85149]' : 'bg-[#3FB950]'}`}
+                            style={{ width: `${Math.min(100, (hardwareBudget.rawBom / hardwareBudget.ceiling) * 100)}%` }}
+                          />
+                        </div>
+                        {procurementLocked && (
+                          <div className="mt-1 text-[8px] font-bold uppercase tracking-wide text-[#F85149]">
+                            Beyond authorized procurement
+                          </div>
                         )}
                       </div>
-                      <div className="h-1 bg-[#2D333B] rounded-full overflow-hidden w-full max-w-full">
-                        <div className="h-full bg-[#3FB950] transition-all duration-100" style={{ width: `${getPercentage()}%` }} />
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-end gap-0.5 content-center max-w-[52%] min-w-0">
-                      {Array.from(new Set([...activeMovements, ...yieldMovements])).slice(0, 8).map((m) => {
-                        const y = yieldMovements.includes(m);
-                        return (
-                          <span
-                            key={m}
-                            title={MovementLabels[m]}
-                            className={`flex items-center justify-center w-5 h-5 rounded border shrink-0 ${
-                              y ? 'bg-[#D29922]/10 border-[#D29922]/30 text-[#D29922]' : 'bg-[#3FB950]/10 border-[#3FB950]/30 text-[#3FB950]'
-                            }`}
-                          >
-                            {getMovementIcon(m, 10)}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex-1 min-h-0 flex flex-col p-2 overflow-hidden">
-                    <div className="flex flex-col gap-2 flex-1 min-h-0">
-                      <div className="flex flex-col gap-1 shrink-0">
-                        <div className="text-[10px] text-[#56D364] font-mono uppercase tracking-wide leading-tight">{engineeringTemplateBlurb.title}</div>
-                        <div className="text-[10px] text-[#b7bdc8] font-mono leading-snug">{engineeringTemplateBlurb.body}</div>
-                      </div>
-                      <div className="flex min-h-0 flex-1 flex-col">
-                        <MobileEditor
-                          programCode={programCode}
-                          setProgramCode={setProgramCode}
-                          closedLanes={(level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0]).closedLanes}
-                          appendPhase={appendPhase}
-                          deleteLastLine={deleteLastLine}
-                          activePhaseIndex={currentPhase}
-                          isPlaying={isPlaying}
-                        />
-                      </div>
-                      {programError && (
-                        <div className="text-[11px] text-[#F85149] font-mono whitespace-pre-wrap leading-tight bg-[#F85149]/10 p-2 border border-[#F85149]/30">
-                          {programError}
-                        </div>
+                    )}
+                    <div className="relative">
+                      {procurementLocked && (
+                        <div className="pointer-events-none absolute -inset-1 z-10 rounded border-2 border-[#F85149]/70 bg-[#F85149]/10 shadow-[0_0_20px_rgba(248,81,73,0.2)]" />
                       )}
-                      <div className="mt-auto pt-2 pb-2">
-                        <button
-                          onClick={() => {
-                            hapticHeavy();
-                            compile();
-                            addLog('FIRMWARE COMPILED', 'var(--green)');
-                            if (!programError) {
+                      <button
+                        type="button"
+                        disabled={!!eepromBurn || procurementLocked}
+                        onClick={() => {
+                          if (procurementLocked) {
+                            addToast('BEYOND_AUTHORIZED_PROCUREMENT — EEPROM interlock.', 'info');
+                            return;
+                          }
+                          hapticHeavy();
+                          compile();
+                          if (programError) return;
+                          const lines = [
+                            'WRITING SECTOR 0xAF…',
+                            'VERIFYING CHECKSUM…',
+                            'LATCHING RELAYS…',
+                            'ARMING OGAS HANDSHAKE…',
+                          ];
+                          let step = 0;
+                          if (burnTimerRef.current != null) window.clearInterval(burnTimerRef.current);
+                          setEepromBurn({ progress: 0, line: lines[0] });
+                          burnTimerRef.current = window.setInterval(() => {
+                            step += 1;
+                            const progress = Math.min(1, step / 26);
+                            setEepromBurn({
+                              progress,
+                              line: lines[Math.min(lines.length - 1, Math.floor(progress * lines.length))],
+                            });
+                            if (progress >= 1 && burnTimerRef.current != null) {
+                              window.clearInterval(burnTimerRef.current);
+                              burnTimerRef.current = null;
+                              setEepromBurn(null);
+                              addLog('LOGIC_IMAGE_BURNED', 'var(--green)');
                               resetDirectiveRunProgress();
                               setZoom(0.8);
                               isPlayingRef.current = true;
@@ -285,16 +323,27 @@ export default function App() {
                               setMobileScreen('metrics');
                               setMobileSplitHeight(mobileMinSplitPct);
                             }
-                          }}
-                          className="w-full text-[14px] bg-[#3FB950]/10 text-[#3FB950] py-3 border-y-2 border-[#3FB950] font-bold uppercase tracking-[0.2em] shadow-[inset_0_0_20px_rgba(63,185,80,0.1)] hover:bg-[#3FB950]/20 transition-colors"
-                        >
-                          [ EXECUTE FIRMWARE ]
-                        </button>
-                      </div>
+                          }, 65);
+                        }}
+                        className="relative z-[1] w-full text-[14px] bg-[#3FB950]/10 py-3 font-bold uppercase tracking-[0.2em] shadow-[inset_0_0_20px_rgba(63,185,80,0.1)] transition-colors disabled:cursor-not-allowed disabled:opacity-40 border-y-2 border-[#3FB950] text-[#3FB950] hover:bg-[#3FB950]/20"
+                      >
+                        [ VALIDATION & BURN ]
+                      </button>
                     </div>
+                    {eepromBurn && (
+                      <div className="rounded border border-[#58A6FF]/40 bg-black/60 px-2 py-2 font-mono text-[9px] text-[#8B949E]">
+                        <div className="mb-1 text-[#58A6FF]">{eepromBurn.line}</div>
+                        <div className="h-2 w-full overflow-hidden rounded-sm bg-[#21262d]">
+                          <div
+                            className="h-full bg-[#58A6FF] transition-[width] duration-75"
+                            style={{ width: `${Math.round(eepromBurn.progress * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-              </>
+                </div>
+              </div>
             )}
 
             {mobileScreen === 'metrics' && (
@@ -332,10 +381,10 @@ export default function App() {
                           onRateChange={(dir, val) => setTrafficRates(prev => ({ ...prev, [dir]: val }))} 
                         />
                       </CollapsibleSection>
-                      <CollapsibleSection id="queue" title="CONGESTION ANALYTICS" isCollapsed={collapsed.queue} onToggle={toggleCollapsed}>
+                      <CollapsibleSection id="queue" title="OSCILLOSCOPE — APPROACH LOAD" isCollapsed={collapsed.queue} onToggle={toggleCollapsed}>
                         <QueueChart history={queueHistory} />
                       </CollapsibleSection>
-                      <CollapsibleSection id="analytics" title="PHASE METRICS" isCollapsed={collapsed.analytics} onToggle={toggleCollapsed}>
+                      <CollapsibleSection id="analytics" title="OSCILLOSCOPE — PHASE TIMING" isCollapsed={collapsed.analytics} onToggle={toggleCollapsed}>
                         <AnalyticalChart history={timingHistory} />
                       </CollapsibleSection>
                       <CollapsibleSection id="log" title="PHASE LOG" isCollapsed={collapsed.log} onToggle={toggleCollapsed}>
@@ -360,6 +409,9 @@ export default function App() {
           {crashInfo && (
             <CrashModal
               info={crashInfo}
+              incidentTape={incidentTape}
+              incidentPlaybackIndex={incidentPlaybackIndex}
+              onIncidentPlaybackIndex={setIncidentPlaybackIndex}
               onResetAndEdit={() => {
                 resetSimulation('MANUAL');
                 setMobileScreen('logic');
@@ -411,7 +463,15 @@ export default function App() {
           ))}
         </AnimatePresence>
       </div>
-      <ManualOverlay isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
+      <ManualOverlay
+        isOpen={isManualOpen}
+        onClose={() => {
+          setIsManualOpen(false);
+          clearManualInitialTab();
+        }}
+        initialTab={manualInitialTab}
+        onInitialTabConsumed={clearManualInitialTab}
+      />
     </div>
   );
 }
@@ -448,20 +508,20 @@ export default function App() {
           <span className="text-[#3FB950] shrink-0">●</span>
           <span className="truncate">{hudSiteTitle(APP_BUILD_VERSION)}</span>
           <span className="bg-[#3FB950]/10 text-[#3FB950] px-2 py-0.5 rounded border border-[#3FB950] text-[11px] shrink-0">OPERATIONAL</span>
-          <button
-            type="button"
-            onClick={() => setIsManualOpen(true)}
-            className="shrink-0 rounded border border-[#2D333B] px-2.5 py-1 text-[10px] font-mono font-bold text-[#8B949E] hover:border-[#3FB950]/50 hover:text-[#3FB950] transition-colors"
+          <IndustrialPanelKey
+            onClick={() => openManual()}
+            className="flex shrink-0 items-center gap-1.5 border-[#3FB950]/55 bg-[#3FB950]/12 px-2.5 py-1 text-[10px] text-[#7AE38A] hover:border-[#3FB950]/80 hover:bg-[#3FB950]/22 hover:text-[#B7F5C0]"
           >
+            <BookOpen size={14} className="shrink-0 text-[#3FB950]" strokeWidth={2.25} />
             MANUAL
-          </button>
-          <button
-            type="button"
+          </IndustrialPanelKey>
+          <IndustrialPanelKey
             onClick={returnToMainMenu}
-            className="shrink-0 rounded border border-[#2D333B] px-2.5 py-1 text-[10px] font-mono font-bold text-[#8B949E] hover:border-[#F85149]/50 hover:text-[#F85149] transition-colors"
+            className="flex shrink-0 items-center gap-1.5 border-[#F85149]/55 bg-[#F85149]/12 px-2.5 py-1 text-[10px] text-[#FF9A94] hover:border-[#F85149]/80 hover:bg-[#F85149]/22 hover:text-[#FFC8C5]"
           >
-            MENU
-          </button>
+            <Menu size={14} className="shrink-0 text-[#F85149]" strokeWidth={2.25} />
+            TERMINAL OUT
+          </IndustrialPanelKey>
         </div>
         <div className="font-mono text-xs text-[#C9D1D9] flex flex-wrap items-center justify-end gap-x-4 gap-y-1 sm:gap-x-6">
           {installDeferred && !isStandaloneDisplay && (
@@ -547,7 +607,7 @@ export default function App() {
           </div>
         </CollapsibleSection>
 
-        <CollapsibleSection id="editor" title="PHASE SEQUENCE" isCollapsed={collapsed.editor} onToggle={toggleCollapsed}>
+        <CollapsibleSection id="editor" title="LOGIC IMAGE (EEPROM SOURCE)" isCollapsed={collapsed.editor} onToggle={toggleCollapsed}>
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <div className="text-[11px] text-[#C9D1D9]/70 font-mono leading-tight">
@@ -573,12 +633,17 @@ export default function App() {
                     onChange={(val) => setProgramCode(val || '')}
                     options={{
                       minimap: { enabled: false },
-                      lineNumbers: "off",
-                      fontSize: 12,
-                      fontFamily: "'JetBrains Mono', monospace",
+                      lineNumbers: 'off',
+                      fontSize: 13,
+                      fontFamily: 'JetBrains Mono, Consolas, monospace',
+                      letterSpacing: 0,
+                      lineHeight: Math.round(13 * 1.22),
                       scrollBeyondLastLine: false,
-                      wordWrap: "on",
-                      padding: { top: 8, bottom: 8 }
+                      wordWrap: 'on',
+                      glyphMargin: false,
+                      folding: false,
+                      contextmenu: false,
+                      padding: { top: 8, bottom: 8 },
                     }}
                   />
                 </div>
@@ -631,21 +696,21 @@ export default function App() {
               </div>
             )}
 
-            {programError && (
-              <div className="text-[11px] text-[#F85149] font-mono whitespace-pre-wrap leading-tight bg-[#F85149]/10 p-1 border border-[#F85149]/30 rounded">
-                {programError}
-              </div>
-            )}
-            <button 
+            <ProgramCompileError
+              message={programError}
+              helpTab={manualHelpTabForCompilerMessage(programError)}
+              onOpenManualHelp={(tab) => openManual(tab)}
+            />
+            <IndustrialPanelKey
               onClick={() => {
                   compile();
-                  addLog("PROGRAM UPDATED", "var(--green)");
+                  addLog('LOGIC_IMAGE_BURNED', 'var(--green)');
                   setIsEditMode(false);
               }}
-              className="text-[11px] bg-[#3FB950]/20 text-[#3FB950] py-1 border border-[#3FB950]/40 rounded hover:bg-[#3FB950]/30"
+              className="w-full py-2 text-[11px] text-[#3FB950] border-[#3FB950]/50 bg-[#3FB950]/12 hover:bg-[#3FB950]/24"
             >
-              RECOMPILE_PHASES
-            </button>
+              COMMIT EEPROM BURN
+            </IndustrialPanelKey>
           </div>
         </CollapsibleSection>
 
@@ -674,7 +739,7 @@ export default function App() {
                 onClick={() => setShowHeatmap(prev => !prev)}
                 className={`px-2 py-0.5 rounded text-[11px] font-mono transition-colors ${showHeatmap ? 'bg-[#F85149]/10 text-[#F85149] border border-[#F85149]' : 'bg-gray-800 text-[#C9D1D9] border border-gray-700'}`}
               >
-                {showHeatmap ? 'HEATMAP_ON' : 'HEATMAP_OFF'}
+                {showHeatmap ? 'THERMAL_ON' : 'THERMAL_OFF'}
               </button>
             </div>
             <div className="flex flex-col gap-2 max-h-[min(52vh,28rem)] overflow-y-auto pr-1 scrollbar-hide">
@@ -709,6 +774,30 @@ export default function App() {
 
         <CollapsibleSection id="telemetry" title="TELEMETRY" isCollapsed={collapsed.telemetry} onToggle={toggleCollapsed}>
           <div className="flex flex-col gap-4">
+            {!currentLevel?.isSandbox && (
+              <div className="rounded border border-[#30363d] bg-black/35 p-2 font-mono text-[10px] text-[#8B949E]">
+                <div className="flex justify-between uppercase tracking-wider">
+                  <span>BOM / ceiling</span>
+                  <span className={procurementLocked ? 'text-[#F85149]' : 'text-[#3FB950]'}>
+                    {hardwareBudget.rawBom} / {hardwareBudget.ceiling} ¥
+                  </span>
+                </div>
+                <div className="mt-1.5 h-2 w-full overflow-hidden rounded-sm bg-[#21262d]">
+                  <div
+                    className={`h-full ${procurementLocked ? 'bg-[#F85149]' : 'bg-[#3FB950]'}`}
+                    style={{ width: `${Math.min(100, (hardwareBudget.rawBom / hardwareBudget.ceiling) * 100)}%` }}
+                  />
+                </div>
+                {hardwareBudget.queueSensorCount > 0 && (
+                  <div className="mt-1 text-[9px] text-[#d29922]">
+                    QUEUE sensor heads billed: {hardwareBudget.queueSensorCount}
+                  </div>
+                )}
+                {procurementLocked && (
+                  <div className="mt-1 text-[9px] font-bold uppercase text-[#F85149]">Procurement interlock</div>
+                )}
+              </div>
+            )}
             <div className="bg-black/20 border border-[#2D333B] p-3 rounded flex flex-col gap-1">
                <div className="text-[10px] uppercase text-[#8B949E] tracking-wider">NETWORK DENSITY</div>
                <div className="text-2xl font-mono text-[#D29922]">
@@ -724,11 +813,11 @@ export default function App() {
                </div>
             </div>
             <div>
-              <div className="text-[10px] uppercase text-[#8B949E] tracking-wider mb-2">CONGESTION ANALYTICS</div>
+              <div className="text-[10px] uppercase text-[#8B949E] tracking-wider mb-2">Oscilloscope — approach load</div>
               <QueueChart history={queueHistory} />
             </div>
             <div>
-              <div className="text-[10px] uppercase text-[#8B949E] tracking-wider mb-2">PHASE METRICS</div>
+              <div className="text-[10px] uppercase text-[#8B949E] tracking-wider mb-2">Oscilloscope — phase timing</div>
               <AnalyticalChart history={timingHistory} />
             </div>
             <div>
@@ -741,7 +830,7 @@ export default function App() {
         <div className="mt-auto space-y-4 pt-4 border-t border-[#2D333B]">
           <div className="flex justify-between items-center w-full py-2 px-3 rounded bg-black/20 border border-[#2D333B]">
             <span className="text-[#8B949E] text-[11px] font-bold tracking-widest font-mono">MASTER PWR</span>
-            <MasterSwitch isOn={isPlaying} onToggle={togglePlayback} />
+            <MasterSwitch isOn={isPlaying} onToggle={togglePlayback} procurementLock={procurementLocked} />
           </div>
           <button 
             onClick={() => resetSimulation('MANUAL')}
@@ -767,12 +856,15 @@ export default function App() {
         )}
         <div className="absolute top-6 right-6 z-20 flex flex-row items-start gap-2">
           <div className="flex flex-col gap-2">
-            <MasterSwitch isOn={isPlaying} onToggle={togglePlayback} />
+            <MasterSwitch isOn={isPlaying} onToggle={togglePlayback} procurementLock={procurementLocked} />
             {TIME_SCALE_OPTIONS.map((s) => (
               <button
                 key={s}
                 type="button"
-                onClick={() => setTimeScale(s)}
+                onClick={() => {
+                  hapticTap();
+                  setTimeScale(s);
+                }}
                 className={`min-w-[3rem] py-1.5 px-2 rounded text-[11px] font-mono font-bold border transition-all shadow-xl ${
                   timeScale === s
                     ? 'border-[#3FB950]/60 bg-[#3FB950]/15 text-[#3FB950]'
@@ -813,10 +905,11 @@ export default function App() {
           {crashInfo && (
             <CrashModal
               info={crashInfo}
+              incidentTape={incidentTape}
+              incidentPlaybackIndex={incidentPlaybackIndex}
+              onIncidentPlaybackIndex={setIncidentPlaybackIndex}
               onResetAndEdit={() => {
                 resetSimulation('MANUAL');
-                // Desktop doesn't have a specific logic screen toggle needed here
-                // as the editor is usually visible or collapsible.
               }}
             />
           )}
@@ -865,7 +958,15 @@ export default function App() {
         </div>
       </main>
       <FirmwareUpdatePrompt />
-      <ManualOverlay isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
+      <ManualOverlay
+        isOpen={isManualOpen}
+        onClose={() => {
+          setIsManualOpen(false);
+          clearManualInitialTab();
+        }}
+        initialTab={manualInitialTab}
+        onInitialTabConsumed={clearManualInitialTab}
+      />
     </div>
   );
 }

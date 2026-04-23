@@ -23,7 +23,7 @@ export class LevelValidator {
       if (level.initialCode) {
         const result = parseTrafficProgram(level.initialCode, level.constraints);
         if (result.error) {
-          errors.push(`Level ${level.id} initial code error: ${result.error}`);
+          errors.push(`Docket ${level.id} logic image rejected at load: ${result.error}`);
         }
       }
     }

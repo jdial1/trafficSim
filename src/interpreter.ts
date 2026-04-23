@@ -35,6 +35,11 @@ export interface HardwareConstraints {
   noConditionals?: boolean;
 }
 
+function memAddr(line1Indexed: number) {
+  const n = Math.max(0, Math.min(255, line1Indexed));
+  return `MEM_ADDR 0x${n.toString(16).toUpperCase().padStart(2, '0')}`;
+}
+
 export function parseTrafficProgram(code: string, constraints?: HardwareConstraints): ParseResult {
   const phases: Phase[] = [];
   const rules: ConditionalRule[] = [];
@@ -88,7 +93,7 @@ export function parseTrafficProgram(code: string, constraints?: HardwareConstrai
     if (/^duration\s*=/i.test(line)) {
       return {
         phases: [],
-        error: `Line ${i + 1}: duration is set in the phase timings panel, not in the program.`,
+        error: `${memAddr(i + 1)}: PANEL_REGISTER_CONFLICT — green dwell is set on the front-panel timing bank, not in the logic image.`,
       };
     }
 
@@ -100,7 +105,7 @@ export function parseTrafficProgram(code: string, constraints?: HardwareConstrai
       if (dirMap[dir] && turnMap[turn]) {
         currentRuleCondition = { targetLaneId: `${dirMap[dir]}-${turnMap[turn]}`, threshold: parseInt(ifMatch[2], 10) };
       } else {
-        return { phases: [], error: `Invalid queue metric on line ${i + 1}: ${ifMatch[1]}` };
+        return { phases: [], error: `${memAddr(i + 1)}: V-BUS_PARITY_ERROR — QUEUE.${ifMatch[1]} not strapped on ILC-92 comparator map.` };
       }
       continue;
     }
@@ -130,14 +135,14 @@ export function parseTrafficProgram(code: string, constraints?: HardwareConstrai
               continue;
             }
           }
-          return { phases: [], error: `Invalid insert command on line ${i + 1}: ${act}` };
+          return { phases: [], error: `${memAddr(i + 1)}: EEPROM_OPCODE_MISMATCH — ${act}` };
         }
         rules.push({ ...currentRuleCondition, insertCommands });
         currentRuleCondition = null;
         continue;
       }
       // If we had a condition but the next line isn't phase_insert, it's a syntax error
-      return { phases: [], error: `Expected phase_insert after if condition on line ${i + 1}` };
+      return { phases: [], error: `${memAddr(i + 1)}: PATCH_PAYLOAD_MISSING — comparator arm requires phase_insert relay burst.` };
     }
 
     if (line === 'EXCLUSIVE_PEDESTRIAN_PHASE.GO') {
@@ -178,14 +183,14 @@ export function parseTrafficProgram(code: string, constraints?: HardwareConstrai
     }
 
     if (!foundKeyword && !phaseMatch) {
-      return { phases: [], error: `Syntax error on line ${i + 1}: ${lines[i].trim()}` };
+      return { phases: [], error: `${memAddr(i + 1)}: UNRECOGNIZED_INST — ${lines[i].trim()}` };
     }
   }
 
   flushBlock(lines.length - 1);
 
   if (phases.length === 0) {
-    return { phases: [], rules, error: 'No valid phases found.' };
+    return { phases: [], rules, error: 'LOGIC_IMAGE_EMPTY — no timed relay banks (phase blocks) assembled.' };
   }
 
   if (constraints) {

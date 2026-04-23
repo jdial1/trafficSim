@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { ChevronDown, Trash2, GripVertical, Cpu } from 'lucide-react';
-import { hapticTap } from './traffic';
+import { hapticTap, hapticError } from './traffic';
 
 type Dir = 'NORTH' | 'SOUTH' | 'EAST' | 'WEST';
 const DIRS: Dir[] = ['NORTH', 'SOUTH', 'EAST', 'WEST'];
@@ -15,9 +15,14 @@ type Props = {
   activePhaseIndex?: number;
   closedLanes?: string[];
   isPlaying?: boolean;
+  maxPhases?: number;
 };
 
-type LineData = { id: string; text: string };
+type LineData = { 
+  id: string; 
+  text: string 
+};
+
 type BlockData = {
   id: string;
   header: LineData | null;
@@ -40,7 +45,7 @@ function parseMovementCommandLine(trimmed: string): MovementTriple | null {
   };
 }
 
-export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteLastLine, activePhaseIndex, closedLanes, isPlaying }: Props) {
+export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteLastLine, activePhaseIndex, closedLanes, isPlaying, maxPhases }: Props) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [composerPath, setComposerPath] = useState<'root' | 'movement_dir' | 'movement_turn' | 'movement_action' | 'cw_action' | 'if_dir' | 'if_turn' | 'if_gt' | 'insert_dir' | 'insert_turn' | 'insert_action'>('root');
   const [builderBase, setBuilderBase] = useState('');
@@ -149,6 +154,8 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
   const closeSheet = () => setSheetOpen(false);
 
   const phaseBlocksInOrder = blocks.filter(b => (b.header?.text.trim() ?? '').startsWith('phase('));
+  const phaseSlotCount = phaseBlocksInOrder.length;
+  const rackFull = maxPhases != null && phaseSlotCount >= maxPhases;
   const hasPhaseBlocks = phaseBlocksInOrder.length > 0;
   const defaultPhaseBlockId = hasPhaseBlocks ? phaseBlocksInOrder[phaseBlocksInOrder.length - 1].id : null;
   const explicitPhaseSelection =
@@ -187,6 +194,10 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
   const handleRootChoice = (choice: 'phase' | 'movement' | 'condition' | 'pedestrian') => {
     hapticTap();
     if (choice === 'phase') {
+      if (maxPhases != null && (programCode.match(/phase\(/g) || []).length >= maxPhases) {
+        hapticError();
+        return;
+      }
       if (selectedBlockId) {
         const selectedIdx = blocks.findIndex(b => b.id === selectedBlockId);
         if (selectedIdx !== -1) {
@@ -440,8 +451,41 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden gap-3 bg-[#0D0F12] p-2 rounded border border-[#2D333B] shadow-inner crt-bezel">
-      
-      {/* Hardware Logic Board */}
+      {maxPhases != null && (
+        <div className="shrink-0 rounded border border-[#30363d] bg-[#12151c] px-2 py-2 font-mono">
+          <div className="flex items-center justify-between text-[9px] uppercase tracking-widest text-[#8B949E] mb-1.5">
+            <span>Relay rack</span>
+            <span className={rackFull ? 'text-[#F85149] font-bold' : 'text-[#58A6FF]'}>
+              {rackFull ? 'OVERFLOW' : 'OK'}
+            </span>
+          </div>
+          <div className="flex gap-1.5 items-end justify-center">
+            {Array.from({ length: maxPhases }, (_, i) => {
+              const filled = i < phaseSlotCount;
+              return (
+                <div
+                  key={i}
+                  className={`h-14 w-7 rounded-sm border-2 shadow-inner ${
+                    filled
+                      ? 'border-[#3FB950]/60 bg-[linear-gradient(180deg,rgba(63,185,80,0.35)_0%,#161b22_45%,#0d1117_100%)]'
+                      : 'border-[#30363d] bg-[#0d1117] border-dashed opacity-70'
+                  }`}
+                >
+                  <div className={`mx-auto mt-1 h-1.5 w-3 rounded-full ${filled ? 'bg-[#3FB950] shadow-[0_0_8px_#3FB950]' : 'bg-[#30363d]'}`} />
+                  <div className="mx-0.5 mt-2 h-6 rounded-[2px] bg-[#21262d] border border-[#30363d]" />
+                </div>
+              );
+            })}
+          </div>
+          {rackFull && (
+            <div className="mt-2 flex items-center justify-center gap-1 text-[8px] font-bold uppercase tracking-wider text-[#F85149]">
+              <span className="inline-block h-2 w-2 rounded-sm bg-[#F85149] animate-pulse shadow-[0_0_10px_#F85149]" />
+              Rack overflow LED
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-editor-touch bg-[linear-gradient(#1A1D23_1px,transparent_1px),linear-gradient(90deg,#1A1D23_1px,transparent_1px)] bg-[size:16px_16px]">
         <Reorder.Group axis="y" values={blocks} onReorder={handleReorderBlocks} className="flex flex-col gap-2 min-h-full p-2">
           {blocks.map((block) => {

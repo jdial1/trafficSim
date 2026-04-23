@@ -1,17 +1,53 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { BRAND, CTA, METRIC, manualRibbonLabel } from './branding';
+import React, { useState, useEffect, useLayoutEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { BRAND, bureauEfficiencyAuditLabel, CTA, METRIC, manualRibbonLabel } from './branding';
 import { APP_BUILD_VERSION } from './generatedVersion';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, CheckCircle2, Check, AlertTriangle, RefreshCw, Trophy, Download, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, CheckCircle2, AlertTriangle, RefreshCw, Trophy, Download, ChevronLeft, ChevronRight, ChevronDown, Copy, BookOpen } from 'lucide-react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { BriefingContent } from './types';
 import { BriefingParser } from './BriefingParser';
 import { useGlobalState } from './GlobalStateContext';
 import { supabase } from './lib/supabase';
 import { MANUAL_APPENDIX, type AppendixBlock } from './manualAppendix';
-import { segmentManualText } from './manualKeywordGlossary';
+import { segmentManualText, type ManualRichSegment } from './manualKeywordGlossary';
 
-export const Histogram = ({ title, value, unit, color, min, max, levelId, dbColumn }: { title: string; value: number; unit: string; color: string; min: number; max: number; levelId?: string; dbColumn?: string; }) => {
+const ManualNavContext = React.createContext<{ jumpToTab: (tab: string) => void } | null>(null);
+
+const manualAppendixTabDisplay = (tab: string, allTabs: string[]) => {
+  const m = /^(\d+)-(.+)$/.exec(tab);
+  if (!m) return tab;
+  const chapter = m[1];
+  const rest = m[2];
+  for (const t of allTabs) {
+    if (t === tab) continue;
+    const m2 = /^(\d+)-(.+)$/.exec(t);
+    if (m2 && m2[2] === rest) return `${chapter}${rest}`;
+  }
+  return rest;
+};
+
+export const Histogram = ({
+  title,
+  value,
+  unit,
+  color,
+  min,
+  max,
+  levelId,
+  dbColumn,
+  distributionLabel,
+}: {
+  title: string;
+  value: number;
+  unit: string;
+  color: string;
+  min: number;
+  max: number;
+  levelId?: string;
+  dbColumn?: string;
+  distributionLabel?: string;
+}) => {
   const [realBars, setRealBars] = useState<number[] | null>(null);
   const [botBuckets, setBotBuckets] = useState<Record<string, number>>({});
   
@@ -51,6 +87,9 @@ export const Histogram = ({ title, value, unit, color, min, max, levelId, dbColu
   return (
     <div className="mb-4 last:mb-0">
       <div className="flex justify-between items-end mb-1"><span className="text-[#8B949E] text-[10px] font-bold tracking-wider">{title}</span><span className="font-bold text-lg" style={{ color }}>{value.toLocaleString()}<span className="text-[10px] ml-1 text-[#8B949E] uppercase">{unit}</span></span></div>
+      {distributionLabel ? (
+        <div className="text-[8px] text-[#8B949E]/90 font-mono uppercase tracking-wide mb-1 leading-tight">{distributionLabel}</div>
+      ) : null}
       <div className="flex items-end h-12 gap-[1.5px] bg-black/40 p-2 border border-[#2D333B] rounded-sm">
         {bars.map((h, i) => {
           const botsInThisBucket = Object.entries(botBuckets).filter(([_, bucketIdx]) => bucketIdx === i).map(([tier]) => tier[0]);
@@ -67,7 +106,7 @@ export const Histogram = ({ title, value, unit, color, min, max, levelId, dbColu
                 }} 
                 className={`w-full transition-all ${isUserBucket ? 'relative scale-x-110' : ''}`} 
               />
-              {isUserBucket && <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[8px] font-black z-10 whitespace-nowrap" style={{ color, textShadow: '0 0 5px rgba(0,0,0,0.8)' }}>YOU</div>}
+              {isUserBucket && <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[8px] font-black z-10 whitespace-nowrap" style={{ color, textShadow: '0 0 5px rgba(0,0,0,0.8)' }}>THIS STATION</div>}
               {botsInThisBucket.length > 0 && !isUserBucket && (
                 <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 flex flex-col items-center">
                   {Object.entries(botBuckets)
@@ -97,15 +136,74 @@ export const Histogram = ({ title, value, unit, color, min, max, levelId, dbColu
   );
 };
 
-const ManualKeyword = ({ label, tip, normalCase }: { label: string; tip: string; normalCase?: boolean }) => {
+const MANUAL_SCROLL_ROOT = 'data-manual-scroll-root';
+
+const ManualTipBody = ({ tip }: { tip: string }) => {
+  const i = tip.indexOf(': ');
+  if (i === -1 || i > 56) return tip;
+  return (
+    <>
+      <span className="mb-1.5 block font-semibold leading-snug">{tip.slice(0, i + 1)}</span>
+      <span className="block">{tip.slice(i + 2)}</span>
+    </>
+  );
+};
+
+const ManualKeyword = ({
+  label,
+  tip,
+  normalCase,
+  jumpTab,
+}: {
+  label: string;
+  tip: string;
+  normalCase?: boolean;
+  jumpTab?: string;
+}) => {
+  const manualNav = React.useContext(ManualNavContext);
   const [open, setOpen] = useState(false);
   const wrapRef = React.useRef<HTMLSpanElement>(null);
+  const tipRef = React.useRef<HTMLSpanElement>(null);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const [tipBox, setTipBox] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  const layoutTip = React.useCallback(() => {
+    if (!open || !triggerRef.current) return;
+    const pad = 12;
+    const width = Math.min(20 * 16, window.innerWidth - pad * 2);
+    const rect = triggerRef.current.getBoundingClientRect();
+    let left = rect.left;
+    if (left + width > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - pad - width);
+    else if (left < pad) left = pad;
+    setTipBox({ top: rect.bottom + 6, left, width });
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setTipBox(null);
+      return;
+    }
+    layoutTip();
+  }, [open, layoutTip, label, tip]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onScrollOrResize = () => layoutTip();
+    window.addEventListener('resize', onScrollOrResize);
+    const root = triggerRef.current?.closest(`[${MANUAL_SCROLL_ROOT}]`);
+    root?.addEventListener('scroll', onScrollOrResize, { passive: true });
+    return () => {
+      window.removeEventListener('resize', onScrollOrResize);
+      root?.removeEventListener('scroll', onScrollOrResize);
+    };
+  }, [open, layoutTip]);
 
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
       const el = e.target as Node | null;
       if (el && wrapRef.current?.contains(el)) return;
+      if (el && tipRef.current?.contains(el)) return;
       setOpen(false);
     };
     document.addEventListener('click', close);
@@ -115,6 +213,7 @@ const ManualKeyword = ({ label, tip, normalCase }: { label: string; tip: string;
   return (
     <span ref={wrapRef} className="relative inline align-baseline">
       <button
+        ref={triggerRef}
         type="button"
         aria-expanded={open}
         aria-label={`Definition: ${label}`}
@@ -127,14 +226,33 @@ const ManualKeyword = ({ label, tip, normalCase }: { label: string; tip: string;
       >
         {label}
       </button>
-      {open && (
-        <span
-          role="tooltip"
-          className="absolute left-0 top-[calc(100%+6px)] z-[120] max-w-[min(20rem,calc(100vw-3rem))] border-2 border-[#2c2b29] bg-[#efebd8] p-2.5 font-sans text-xs font-normal normal-case leading-snug tracking-normal text-[#2c2b29] shadow-[4px_4px_0_#2c2b29]"
-        >
-          {tip}
-        </span>
-      )}
+      {open &&
+        tipBox &&
+        createPortal(
+          <span
+            ref={tipRef}
+            role="tooltip"
+            style={{ position: 'fixed', top: tipBox.top, left: tipBox.left, width: tipBox.width, zIndex: 20000 }}
+            className="box-border break-words border-2 border-[#2c2b29] bg-[#efebd8] p-3 font-sans text-sm font-normal normal-case leading-relaxed tracking-normal text-[#2c2b29] shadow-[4px_4px_0_#2c2b29]"
+          >
+            <ManualTipBody tip={tip} />
+            {jumpTab && manualNav && (
+              <button
+                type="button"
+                className="mt-3 flex w-full items-center justify-center gap-1 border-2 border-[#2c2b29] bg-[#2c2b29] py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest text-[#efebd8] hover:bg-[#3d3a36]"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  manualNav.jumpToTab(jumpTab);
+                  setOpen(false);
+                }}
+              >
+                <BookOpen size={12} />
+                Open § {jumpTab}
+              </button>
+            )}
+          </span>,
+          document.body,
+        )}
     </span>
   );
 };
@@ -144,13 +262,38 @@ const ManualRichText = ({ text, className, variant = 'body' }: { text: string; c
   const isHeading = variant === 'heading';
   return (
     <span className={`${className ?? ''} ${isHeading ? 'uppercase' : ''}`.trim()}>
-      {segs.map((s, idx) =>
-        s.kind === 'plain' ? (
-          <span key={idx}>{s.text}</span>
-        ) : (
-          <ManualKeyword key={idx} label={s.text} tip={s.tip} normalCase={isHeading} />
-        ),
-      )}
+      {segs.map((s: ManualRichSegment, idx: number) => {
+        if (s.kind === 'plain') return <span key={idx}>{s.text}</span>;
+        if (s.kind === 'scribble')
+          return (
+            <span
+              key={idx}
+              className="my-2 ml-1 inline-block max-w-[95%] -rotate-[0.8deg] border border-dashed border-[#6b5a4b] bg-[#f7f0dc] px-3 py-2 font-mono text-[0.85em] italic leading-snug text-[#4a3728] shadow-[2px_3px_0_#c4b49a]"
+            >
+              {s.text}
+            </span>
+          );
+        if (s.kind === 'redact')
+          return (
+            <span
+              key={idx}
+              className="mx-0.5 inline-block bg-[#1a1814] px-1.5 py-0.5 font-mono text-[0.75em] uppercase tracking-widest text-[#8B949E]"
+            >
+              {s.text}
+            </span>
+          );
+        if (s.kind === 'strike')
+          return (
+            <span
+              key={idx}
+              className="mx-0.5 inline decoration-[#8B4513] decoration-2 line-through opacity-75"
+              title="Superseded text — see adjacent ERRATA"
+            >
+              {s.text}
+            </span>
+          );
+        return <ManualKeyword key={idx} label={s.text} tip={s.tip} jumpTab={s.jumpTab} normalCase={isHeading} />;
+      })}
     </span>
   );
 };
@@ -172,8 +315,86 @@ const ManualAppendixBlock = ({ block }: { block: AppendixBlock }) => {
   }
   if (block.t === 'code') {
     return (
-      <div className="mb-6 border-l-4 border-[#2c2b29] bg-[#2c2b29]/5 p-4 font-mono text-sm whitespace-pre text-[#2c2b29]">
+      <div className="relative mb-6 border-l-4 border-[#2c2b29] bg-[#2c2b29]/5 p-4 pr-14 font-mono text-sm whitespace-pre text-[#2c2b29]">
+        <button
+          type="button"
+          title="Copy to clipboard"
+          onClick={() => void navigator.clipboard?.writeText(block.text)}
+          className="absolute right-2 top-2 flex items-center gap-1 border-2 border-[#2c2b29] bg-[#efebd8] px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-wider text-[#2c2b29] hover:bg-[#2c2b29] hover:text-[#efebd8]"
+        >
+          <Copy size={12} />
+          Copy
+        </button>
         <ManualRichText text={block.text} />
+      </div>
+    );
+  }
+  if (block.t === 'redact') {
+    return (
+      <p className="mb-4 border-2 border-[#2c2b29] bg-[#1a1814] px-3 py-2 font-mono text-xs uppercase leading-relaxed tracking-widest text-[#8B949E]">
+        {block.text}
+      </p>
+    );
+  }
+  if (block.t === 'warn') {
+    const isRed = block.tone === 'red';
+    return (
+      <div
+        className={`mb-6 flex gap-3 border-4 p-4 font-mono text-sm leading-snug ${
+          isRed
+            ? 'border-[#F85149] bg-[#F85149]/10 text-[#5c1510]'
+            : 'border-[#9a6b2d] bg-[#f4e4c0] text-[#3d2a12]'
+        }`}
+      >
+        <AlertTriangle className={`h-6 w-6 shrink-0 ${isRed ? 'text-[#F85149]' : 'text-[#9a6b2d]'}`} strokeWidth={2.5} />
+        <div className="min-w-0 pt-0.5">
+          <ManualRichText text={block.text} />
+        </div>
+      </div>
+    );
+  }
+  if (block.t === 'pre') {
+    return (
+      <pre className="mb-6 overflow-x-auto border-2 border-[#2c2b29] bg-[#2c2b29]/5 p-4 font-mono text-xs leading-tight text-[#2c2b29]">
+        {block.text}
+      </pre>
+    );
+  }
+  if (block.t === 'margin') {
+    return (
+      <p
+        className="mb-4 border-l-2 border-[#8b6914]/70 bg-[#f4e8c0]/40 pl-3 py-2 text-xs italic leading-snug text-[#4a3a18]"
+        style={{ fontFamily: '"Segoe Script", "Bradley Hand ITC", "Apple Chancery", cursive' }}
+      >
+        {block.text}
+      </p>
+    );
+  }
+  if (block.t === 'table') {
+    return (
+      <div className="mb-6 overflow-x-auto border-2 border-[#2c2b29]">
+        <table className="w-full min-w-[280px] border-collapse font-mono text-xs text-[#2c2b29]">
+          <thead>
+            <tr className="bg-[#2c2b29] text-[#efebd8]">
+              {block.headers.map((h, hi) => (
+                <th key={hi} className="border border-[#2c2b29] px-2 py-2 text-left font-bold uppercase tracking-wide">
+                  <ManualRichText text={h} variant="heading" />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, ri) => (
+              <tr key={ri} className={ri % 2 === 1 ? 'bg-[#2c2b29]/5' : ''}>
+                {row.map((cell, ci) => (
+                  <td key={ci} className="border border-[#2c2b29]/40 px-2 py-2 align-top leading-relaxed">
+                    <ManualRichText text={cell} />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     );
   }
@@ -188,9 +409,21 @@ const ManualAppendixBlock = ({ block }: { block: AppendixBlock }) => {
   );
 };
 
-export const ManualOverlay = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => {
+export const ManualOverlay = ({
+  isOpen,
+  onClose,
+  initialTab,
+  onInitialTabConsumed,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  initialTab?: string | null;
+  onInitialTabConsumed?: () => void;
+}) => {
   const { highscores, unlockedLevels } = useGlobalState();
+  const [manualView, setManualView] = useState<'toc' | 'page'>('toc');
   const [pageIndex, setPageIndex] = useState(0);
+  const openHandledRef = React.useRef(false);
 
   const pages = useMemo(
     () =>
@@ -203,16 +436,52 @@ export const ManualOverlay = ({ isOpen, onClose }: { isOpen: boolean; onClose: (
     [highscores, unlockedLevels],
   );
 
-  useEffect(() => {
-    if (isOpen) setPageIndex(0);
-  }, [isOpen]);
+  const jumpToTab = React.useCallback(
+    (tab: string) => {
+      const idx = pages.findIndex((p) => p.tab === tab);
+      if (idx >= 0) {
+        setPageIndex(idx);
+        setManualView('page');
+      }
+    },
+    [pages],
+  );
+
+  const jumpCtx = useMemo(() => ({ jumpToTab }), [jumpToTab]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      openHandledRef.current = false;
+      return;
+    }
+    if (openHandledRef.current) return;
+    openHandledRef.current = true;
+    if (initialTab) {
+      const idx = pages.findIndex((p) => p.tab === initialTab);
+      if (idx >= 0) {
+        setPageIndex(idx);
+        setManualView('page');
+      } else {
+        setManualView('toc');
+        setPageIndex(0);
+      }
+      onInitialTabConsumed?.();
+    } else {
+      setManualView('toc');
+      setPageIndex(0);
+    }
+  }, [isOpen, initialTab, pages, onInitialTabConsumed]);
 
   const safeIndex = pages.length ? Math.min(pageIndex, pages.length - 1) : 0;
   const page = pages[safeIndex];
+  const pageTabLabels = useMemo(() => {
+    const tabs = pages.map((p) => p.tab);
+    return tabs.map((tab) => manualAppendixTabDisplay(tab, tabs));
+  }, [pages]);
 
   return (
     <AnimatePresence>
-      {isOpen && page && (
+      {isOpen && pages.length > 0 && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -226,55 +495,88 @@ export const ManualOverlay = ({ isOpen, onClose }: { isOpen: boolean; onClose: (
             className="w-full max-w-4xl h-full flex flex-col bg-[#efebd8] text-[#2c2b29] rounded-sm shadow-2xl border-4 border-[#2c2b29] font-serif overflow-hidden"
           >
             <div className="flex items-center justify-between bg-[#2c2b29] text-[#efebd8] px-4 py-2 font-mono font-bold tracking-widest shrink-0">
-              <span>{manualRibbonLabel()}</span>
+              <span>{manualRibbonLabel()} · INDEX</span>
               <button type="button" onClick={onClose} className="p-1 hover:bg-white/20 rounded transition-colors">
                 <X size={20} />
               </button>
             </div>
-            {pages.length > 1 && (
-              <div className="flex shrink-0 gap-1 overflow-x-auto border-b-2 border-[#2c2b29] bg-[#efebd8] px-2 py-2 font-mono text-[10px] font-bold uppercase tracking-wider">
-                {pages.map((p, i) => (
-                  <button
-                    key={p.tab + i}
-                    type="button"
-                    onClick={() => setPageIndex(i)}
-                    className={`shrink-0 rounded-sm px-3 py-1.5 transition-colors ${
-                      safeIndex === i ? 'bg-[#2c2b29] text-[#efebd8]' : 'text-[#2c2b29] hover:bg-[#2c2b29]/10'
-                    }`}
-                  >
-                    {p.tab}
-                  </button>
-                ))}
-              </div>
-            )}
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex-1 overflow-y-auto p-6 sm:p-10">
-                <h1 className="mb-8 border-b-2 border-[#2c2b29] pb-4 font-mono text-3xl font-bold sm:text-4xl">
-                  <ManualRichText text={page.title} variant="heading" />
-                </h1>
-                {page.blocks.map((block, i) => (
-                  <ManualAppendixBlock key={i} block={block} />
-                ))}
-              </div>
-              {pages.length > 1 && (
-                <div className="flex shrink-0 items-center justify-between gap-4 border-t-2 border-[#2c2b29] bg-[#2c2b29]/5 px-4 py-3 font-mono text-[10px] font-bold uppercase tracking-widest text-[#2c2b29]">
+              {manualView === 'toc' ? (
+                <div {...{ [MANUAL_SCROLL_ROOT]: '' }} className="flex-1 overflow-y-auto p-6 sm:p-10">
+                  <h1 className="mb-2 border-b-2 border-[#2c2b29] pb-3 font-mono text-2xl font-bold sm:text-3xl uppercase tracking-tight">
+                    Table of contents
+                  </h1>
+                  <p className="mb-8 font-mono text-xs leading-relaxed text-[#2c2b29]/80">
+                    Select a volume entry. Tab ids mirror the help(1) routing table on the SEC-082 filestore.
+                  </p>
+                  <ol className="list-none space-y-1 p-0 font-mono text-sm">
+                    {pages.map((p, i) => (
+                      <li key={p.tab}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPageIndex(i);
+                            setManualView('page');
+                          }}
+                          className="flex w-full items-baseline gap-3 border border-transparent px-2 py-2 text-left hover:border-[#2c2b29] hover:bg-[#2c2b29]/5"
+                        >
+                          <span className="shrink-0 font-bold text-[#8B6f4a]">§{p.section}</span>
+                          <span className="shrink-0 text-[10px] uppercase tracking-wider text-[#5c5346]">{p.tab}</span>
+                          <span className="min-w-0 flex-1 leading-snug">{p.title}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ) : (
+                <ManualNavContext.Provider value={jumpCtx}>
+                  <div {...{ [MANUAL_SCROLL_ROOT]: '' }} className="flex-1 overflow-y-auto p-6 sm:p-10">
+                    <div className="mb-6 flex flex-wrap items-center gap-3 border-b-2 border-[#2c2b29] pb-4">
+                      <button
+                        type="button"
+                        onClick={() => setManualView('toc')}
+                        className="rounded-sm border-2 border-[#2c2b29] bg-[#2c2b29] px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest text-[#efebd8] hover:bg-[#3d3a36]"
+                      >
+                        ← Index
+                      </button>
+                      <span className="font-mono text-[11px] font-bold text-[#6b5a4b]">§{page.section}</span>
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-[#5c5346]">{page.tab}</span>
+                    </div>
+                    <h1 className="mb-8 font-mono text-2xl font-bold sm:text-3xl">
+                      <ManualRichText text={page.title} variant="heading" />
+                    </h1>
+                    {page.blocks.map((block, i) => (
+                      <ManualAppendixBlock key={i} block={block} />
+                    ))}
+                  </div>
+                </ManualNavContext.Provider>
+              )}
+              {manualView === 'page' && pages.length > 1 && (
+                <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t-2 border-[#2c2b29] bg-[#2c2b29]/5 px-4 py-3 font-mono text-[10px] font-bold uppercase tracking-widest text-[#2c2b29]">
                   <button
                     type="button"
-                    onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
+                    onClick={() => setManualView('toc')}
+                    className="rounded-sm border border-[#2c2b29] px-2 py-2 hover:bg-[#2c2b29]/10"
+                  >
+                    Index
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPageIndex((x) => Math.max(0, x - 1))}
                     disabled={safeIndex <= 0}
-                    className="flex items-center gap-1 rounded-sm border border-[#2c2b29] px-3 py-2 transition-colors enabled:hover:bg-[#2c2b29]/10 disabled:opacity-40"
+                    className="flex items-center gap-1 rounded-sm border border-[#2c2b29] px-3 py-2 enabled:hover:bg-[#2c2b29]/10 disabled:opacity-40"
                   >
                     <ChevronLeft size={16} />
                     Prev
                   </button>
                   <span className="tabular-nums">
-                    {safeIndex + 1} / {pages.length}
+                    {pageTabLabels[safeIndex]} · {safeIndex + 1}/{pages.length}
                   </span>
                   <button
                     type="button"
-                    onClick={() => setPageIndex((i) => Math.min(pages.length - 1, i + 1))}
+                    onClick={() => setPageIndex((x) => Math.min(pages.length - 1, x + 1))}
                     disabled={safeIndex >= pages.length - 1}
-                    className="flex items-center gap-1 rounded-sm border border-[#2c2b29] px-3 py-2 transition-colors enabled:hover:bg-[#2c2b29]/10 disabled:opacity-40"
+                    className="flex items-center gap-1 rounded-sm border border-[#2c2b29] px-3 py-2 enabled:hover:bg-[#2c2b29]/10 disabled:opacity-40"
                   >
                     Next
                     <ChevronRight size={16} />
@@ -351,9 +653,20 @@ export const Rankings = ({ levelId }: { levelId: string }) => {
   );
 };
 
+const readDocketFatal = (levelId: string) => {
+  try {
+    return sessionStorage.getItem(`traffic_docket_fatal_${levelId}`) === '1';
+  } catch {
+    return false;
+  }
+};
+
 export const LevelSelect = ({ levels, activeLevelId, unlockedLevels = [], onSelectLevel }: { levels: BriefingContent[]; activeLevelId: string; unlockedLevels?: string[]; onSelectLevel: (id: string) => void; }) => {
   const { highscores } = useGlobalState();
+  const [completedCollapsed, setCompletedCollapsed] = useState(false);
   const visibleLevels = levels.filter((l, i) => unlockedLevels.includes(l.id) || i === 0);
+  const openLevels = visibleLevels.filter((l) => !highscores[l.id]);
+  const completedLevels = visibleLevels.filter((l) => Boolean(highscores[l.id]));
   const rawActiveLevel = levels.find(l => l.id === activeLevelId) ?? levels[0];
   const activeIdx = levels.findIndex(l => l.id === rawActiveLevel.id);
   const isActiveUnlocked = unlockedLevels.includes(rawActiveLevel.id) || activeIdx === 0;
@@ -363,50 +676,152 @@ export const LevelSelect = ({ levels, activeLevelId, unlockedLevels = [], onSele
         clearCars: rawActiveLevel.winCondition?.clearCars || 0
       })
     : null;
+
+  const renderDirectiveRow = (l: BriefingContent, variant: 'open' | 'completed') => {
+    const completed = Boolean(highscores[l.id]);
+    const fatalStamp = readDocketFatal(l.id) && !completed;
+    const active = l.id === activeLevelId;
+    const inactiveBorder =
+      variant === 'completed' ? 'border-l-[#30363d] bg-[#161b22]' : 'border-l-[#c4a574] bg-[#1a1d23] hover:bg-[#222833]';
+    const tabGradient =
+      variant === 'completed'
+        ? 'from-[#1a3020] to-[#132a1a] opacity-95'
+        : 'from-[#e8d4a8] to-[#c4a574] opacity-90';
+    return (
+      <button
+        key={l.id}
+        type="button"
+        onClick={() => onSelectLevel(l.id)}
+        className={`relative w-full overflow-hidden border-l-4 py-2.5 pl-3 pr-24 text-left transition-colors ${
+          active ? 'border-l-[#3FB950] bg-[#1a2332] ring-1 ring-[#3FB950]/35' : inactiveBorder
+        }`}
+      >
+        <div
+          className={`absolute left-0 top-0 h-full w-3 bg-gradient-to-b ${tabGradient}`}
+          aria-hidden
+        />
+        <div className="pl-4">
+          <div
+            className={`text-[11px] font-bold tracking-wide ${variant === 'completed' ? 'text-[#7ee787]' : 'text-[#d29922]'}`}
+          >
+            {l.id}
+          </div>
+          <div className="mt-0.5 truncate text-[9px] text-[#8B949E]">{l.title}</div>
+        </div>
+        {completed && (
+          <div
+            className="pointer-events-none absolute right-2 top-1/2 z-10 -translate-y-1/2 rotate-[-14deg] border-[3px] border-[#238636] bg-[#3FB950]/15 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-[#3FB950] shadow-[0_0_12px_rgba(63,185,80,0.25)]"
+            style={{ borderStyle: 'double' }}
+          >
+            Certified
+          </div>
+        )}
+        {fatalStamp && (
+          <div className="pointer-events-none absolute right-2 top-1/2 z-10 -translate-y-1/2 rotate-[10deg] border-2 border-[#F85149] bg-[#F85149]/20 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-[#F85149]">
+            Fatal error
+          </div>
+        )}
+      </button>
+    );
+  };
+
   return (
-    <div className="flex flex-col h-full bg-[#1A1D23] p-4 text-[#C9D1D9] font-mono overflow-y-auto scrollbar-hide">
-      <div className="text-[10px] text-[#8B949E] uppercase tracking-wider mb-2 truncate border-b border-[#2D333B] pb-2 font-bold">
+    <div className="flex flex-col h-full bg-[#141821] p-4 text-[#C9D1D9] font-mono overflow-y-auto scrollbar-hide">
+      <div className="mb-3 truncate border-b border-[#2D333B] pb-2 text-[10px] font-bold uppercase tracking-wider text-[#8B949E]">
         {rawActiveLevel.title}
       </div>
-      <div className="flex gap-2 mb-4 shrink-0 overflow-x-auto pb-1">
-        {visibleLevels.map((l) => {
-          const completed = Boolean(highscores[l.id]);
-          const active = l.id === activeLevelId;
-          const tabClass =
-            active && completed
-              ? 'border-[#3FB950] bg-[#3FB950]/12 text-[#3FB950]'
-              : active && !completed
-                ? 'bg-[#3FB950]/20 border-[#3FB950] text-[#3FB950]'
-                : !active && completed
-                  ? 'border-[#3FB950]/40 bg-black/20 text-[#7ee787] hover:border-[#3FB950]/65'
-                  : 'bg-black/20 border-[#2D333B] text-[#C9D1D9] hover:bg-white/5';
-          return (
+      <div className="mb-4 shrink-0 space-y-4">
+        {openLevels.length > 0 && (
+          <div>
+            <div className="mb-2 text-[9px] font-bold uppercase tracking-[0.2em] text-[#d29922]">Open directives</div>
+            <div className="space-y-2">{openLevels.map((l) => renderDirectiveRow(l, 'open'))}</div>
+          </div>
+        )}
+        {completedLevels.length > 0 && (
+          <div className={openLevels.length > 0 ? 'mt-1 border-t border-[#30363d] pt-3' : ''}>
             <button
-              key={l.id}
               type="button"
-              onClick={() => onSelectLevel(l.id)}
-              className={`relative flex-1 min-w-[60px] overflow-hidden py-2 text-center text-[10px] font-bold border rounded-none transition-colors ${tabClass}`}
+              aria-expanded={!completedCollapsed}
+              onClick={() => setCompletedCollapsed((c) => !c)}
+              className="mb-2 flex w-full items-center justify-between gap-2 rounded border border-[#30363d] bg-[#161b22] px-2 py-2 text-left font-mono transition-colors hover:border-[#484f58] hover:bg-[#1c2128]"
             >
-              {completed && (
-                <Check
-                  className="pointer-events-none absolute left-1/2 top-1/2 z-0 size-9 -translate-x-1/2 -translate-y-1/2 text-[#3FB950] opacity-[0.18]"
-                  strokeWidth={2.75}
-                  aria-hidden
-                />
+              <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#6e7681]">
+                Completed ({completedLevels.length})
+              </span>
+              {completedCollapsed ? (
+                <ChevronRight size={16} className="shrink-0 text-[#8B949E]" strokeWidth={2.25} aria-hidden />
+              ) : (
+                <ChevronDown size={16} className="shrink-0 text-[#8B949E]" strokeWidth={2.25} aria-hidden />
               )}
-              <span className="relative z-10">{l.id}</span>
             </button>
-          );
-        })}
+            {!completedCollapsed && (
+              <div className="max-h-[min(40vh,15rem)] space-y-2 overflow-y-auto pr-0.5 scrollbar-hide">
+                {completedLevels.map((l) => renderDirectiveRow(l, 'completed'))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       {isActiveUnlocked && activeLevel && (
-        <div className="border-2 border-[#2D333B] bg-black/40 p-4 relative shadow-xl">
-          {score ? <div className="absolute top-0 right-0 px-2 py-0.5 bg-[#3FB950] text-[#0D0F12] text-[9px] font-bold tracking-widest flex items-center gap-1"><CheckCircle2 size={14} /> COMPLETED</div> : <div className="absolute top-0 right-0 px-2 py-0.5 bg-[#F85149] text-black text-[9px] font-bold tracking-widest uppercase">Confidential</div>}
-          <div className="text-xs text-[#8B949E] mb-1 mt-2 uppercase">From: <span className="text-[#58A6FF]">{activeLevel.from}</span></div>
-          <div className="text-xs text-[#8B949E] mb-3 border-b border-[#2D333B] pb-3 uppercase">Subject: <span className="text-[#C9D1D9]">{activeLevel.subject}</span></div>
+        <div className="relative border-2 border-[#2D333B] bg-black/50 p-4 shadow-xl">
+          {score ? (
+            <div className="absolute right-3 top-3 rotate-[-12deg] border-[3px] border-[#238636] bg-[#3FB950]/12 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.2em] text-[#3FB950] shadow-[0_0_14px_rgba(63,185,80,0.2)]">
+              Verified
+            </div>
+          ) : (
+            <div className="absolute top-0 right-0 bg-[#F85149] px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-black">Confidential</div>
+          )}
+          {activeLevel.bureauMemo && (
+            <div className="mb-3 border border-[#d29922]/35 bg-[#d29922]/10 p-2 text-[10px] leading-snug text-[#e3c78a]">
+              <span className="font-bold uppercase tracking-wider text-[#d29922]">Bureau memo — </span>
+              {activeLevel.bureauMemo}
+            </div>
+          )}
+          <div className="text-xs text-[#8B949E] mb-1 mt-1 uppercase">
+            From: <span className="text-[#58A6FF]">{activeLevel.from}</span>
+          </div>
+          <div className="text-xs text-[#8B949E] mb-3 border-b border-[#2D333B] pb-3 uppercase">
+            Subject: <span className="text-[#C9D1D9]">{activeLevel.subject}</span>
+          </div>
           <div className="text-[13px] leading-relaxed whitespace-pre-wrap">{activeLevel.body}</div>
           <ul className="mt-4 space-y-2 list-disc pl-5 text-[12px] text-[#3FB950]">{activeLevel.bullets.map((b, i) => (<li key={i}><span className="text-[#C9D1D9]">{b}</span></li>))}</ul>
-          {score && <div className="mt-6 pt-4 border-t-2 border-[#2D333B] border-dashed space-y-3"><Histogram title={METRIC.THROUGHPUT} value={score.secondsToClear} unit="s" color="#3FB950" min={10} max={120} levelId={activeLevel.id} dbColumn="seconds_to_clear" /><Histogram title={METRIC.INSTRUCTION_COUNT} value={score.instructionCount} unit="LINES" color="#58A6FF" min={2} max={30} levelId={activeLevel.id} dbColumn="instruction_count" /><Histogram title={METRIC.HARDWARE_COST} value={score.hardwareCost} unit="¥" color="#D29922" min={100} max={2000} levelId={activeLevel.id} dbColumn="hardware_cost" /></div>}
+          {score && (
+            <div className="mt-6 pt-4 border-t-2 border-[#2D333B] border-dashed space-y-3">
+              <Histogram
+                title={METRIC.THROUGHPUT}
+                value={score.secondsToClear}
+                unit="s"
+                color="#3FB950"
+                min={10}
+                max={120}
+                levelId={activeLevel.id}
+                dbColumn="seconds_to_clear"
+                distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
+              />
+              <Histogram
+                title={METRIC.INSTRUCTION_COUNT}
+                value={score.instructionCount}
+                unit="SECT"
+                color="#58A6FF"
+                min={2}
+                max={30}
+                levelId={activeLevel.id}
+                dbColumn="instruction_count"
+                distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
+              />
+              <Histogram
+                title={METRIC.HARDWARE_COST}
+                value={score.hardwareCost}
+                unit="¥"
+                color="#D29922"
+                min={100}
+                max={2000}
+                levelId={activeLevel.id}
+                dbColumn="hardware_cost"
+                distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
+              />
+            </div>
+          )}
           <Rankings levelId={activeLevel.id} />
         </div>
       )}
@@ -460,9 +875,9 @@ export const GameIntro = ({
             <span>{BRAND.REF_DOC}</span>
             <span>{APP_BUILD_VERSION}</span>
           </div>
-          <p className="mb-2">1. PROTOCOL 01: Author signal phases.</p>
-          <p className="mb-2">2. PROTOCOL 02: Monitor demand and queues.</p>
-          <p>3. PROTOCOL 03: Achieve target throughput.</p>
+          <p className="mb-2">1. PROTOCOL 01: Author phase-sequence logic images.</p>
+          <p className="mb-2">2. PROTOCOL 02: Monitor demand and ILC-92 returns.</p>
+          <p>3. PROTOCOL 03: Satisfy mandated discharge quota (municipal flow audit).</p>
         </div>
         <div className="flex w-full flex-col gap-3">
           {showInstallPrompt && (

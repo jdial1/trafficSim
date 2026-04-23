@@ -1,27 +1,58 @@
 import React from 'react';
-import { METRIC } from './branding';
+import { BRAND, bureauEfficiencyAuditLabel, METRIC } from './branding';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronDown, ChevronRight, AlertTriangle, RotateCcw, Pause, Play } from 'lucide-react';
-import { Vehicle, Movement, LogEntry } from './types';
+import { ChevronDown, ChevronRight, AlertTriangle, RotateCcw, Pause, Play, CircleHelp } from 'lucide-react';
+import { Vehicle, Movement, LogEntry, IncidentFrame } from './types';
 import { CrashInfo } from './IntersectionEngine';
 import { LANES, LANE_MAP } from './constants';
-import { hapticHeavy, DIRECTIONS, getDirection, getMovementIcon, MovementLabels } from './traffic';
+import { formatTransitUnitTag, hapticHeavy, hapticTap, DIRECTIONS, getDirection, getMovementIcon, MovementLabels } from './traffic';
 import { Histogram } from './CoreComponents';
 import { Phase, PhaseCommand } from './interpreter';
 
-export const CrashModal = ({ info, onResetAndEdit }: { info: CrashInfo; onResetAndEdit: () => void; }) => {
+export const industrialKeyClass =
+  'rounded-none border-2 border-b-[3px] border-[#2D333B] bg-[#161B22] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] font-mono font-bold uppercase tracking-wider transition-colors active:translate-y-px active:border-b-2 active:shadow-inner';
+
+export const IndustrialPanelKey = ({
+  children,
+  className = '',
+  ...props
+}: React.ComponentProps<'button'>) => (
+  <button type="button" className={`${industrialKeyClass} ${className}`.trim()} {...props}>
+    {children}
+  </button>
+);
+
+export const CrashModal = ({
+  info,
+  onResetAndEdit,
+  incidentTape,
+  incidentPlaybackIndex,
+  onIncidentPlaybackIndex,
+}: {
+  info: CrashInfo;
+  onResetAndEdit: () => void;
+  incidentTape: IncidentFrame[] | null;
+  incidentPlaybackIndex: number;
+  onIncidentPlaybackIndex: (idx: number) => void;
+}) => {
   const isGridlock = info.type === 'OVERFLOW';
   const isOverheat = info.type === 'OVERHEAT';
   
-  const title = isGridlock ? 'GRIDLOCK_DETECTED' : isOverheat ? 'SYSTEM_OVERHEAT' : 'COLLISION_DETECTED';
+  const title = isGridlock ? 'GRIDLOCK_DETECTED' : isOverheat ? 'THERMAL_SHUNT_TRIP' : 'KINETIC_OVERLAP_EXCEPTION';
   const errorCode = isGridlock ? 'ERROR_0x94' : isOverheat ? 'ERROR_0xAF' : 'ERROR_0x82';
-  const mainHeading = isGridlock ? 'Gridlock Detected' : isOverheat ? 'Cycle Limit Exceeded' : 'Structural Failure';
+  const fatalLine = isGridlock
+    ? 'FATAL: APPROACH BUFFER SATURATION (0x94).'
+    : isOverheat
+    ? 'FATAL: RELAY THERMAL RUNAWAY (0xAF).'
+    : 'FATAL: KINETIC OVERLAP (0x82).';
+  const mainHeading = isGridlock ? 'BUFFER SATURATION HALT' : isOverheat ? 'THERMAL SHUNT TRIP' : 'KINETIC OVERLAP LATCH';
   
   const description = isGridlock 
-    ? 'Traffic queues have exceeded safety buffers. System halt triggered to prevent cascade failure.'
+    ? 'Upstream approach buffers exceeded guard depth. CRITICAL_HALT asserted to prevent yard cascade.'
     : isOverheat
-    ? 'Phase cycle duration exceeds hardware synchronization limits. Thermal protection active.'
-    : `Vehicles ${info.vehicleIds.join(' & ')} collided at [${info.x.toFixed(0)}, ${info.y.toFixed(0)}]`;
+    ? 'Programmed green sum exceeds OGAS synchronization envelope. Thermal shunt opened; lamp bus frozen.'
+    : `Units ${info.vehicleIds.map(formatTransitUnitTag).join(' & ')} co-registered in conflict plane at grid [${info.x.toFixed(0)}, ${info.y.toFixed(0)}]. Form 9 incident record queued.`;
+  const manualRef = 'Consult OGAS Manual 1.4 (tab FAULT) for trip class, FLASH-RED latch, annunciator horn, and clearance notes.';
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-[60] flex items-center justify-center bg-red-900/40 backdrop-blur-sm p-4">
@@ -37,7 +68,9 @@ export const CrashModal = ({ info, onResetAndEdit }: { info: CrashInfo; onResetA
               </div>
               <div>
                   <h2 className="text-[#F85149] text-xl font-bold tracking-wider uppercase">{mainHeading}</h2>
+                  <p className="text-[#C9D1D9] text-[10px] leading-tight mt-1 font-bold tracking-wide">{fatalLine}</p>
                   <p className="text-[#8B949E] text-[10px] leading-tight mt-1">{description}</p>
+                  <p className="text-[#8B949E] text-[10px] leading-tight mt-1.5 italic">{manualRef}</p>
               </div>
           </div>
           
@@ -57,7 +90,7 @@ export const CrashModal = ({ info, onResetAndEdit }: { info: CrashInfo; onResetA
 
               {isGridlock && info.laneCongestion && (
                 <div className="mt-4 pt-3 border-t border-[#2D333B]/50">
-                  <div className="text-[9px] text-[#8B949E] uppercase tracking-widest mb-2 font-bold">Congestion Analytics</div>
+                  <div className="text-[9px] text-[#8B949E] uppercase tracking-widest mb-2 font-bold">Buffer depth snapshot</div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                     {Object.entries(info.laneCongestion)
                       .filter(([_, q]) => q > 0)
@@ -74,10 +107,28 @@ export const CrashModal = ({ info, onResetAndEdit }: { info: CrashInfo; onResetA
               )}
           </div>
 
+          {incidentTape && incidentTape.length > 1 && (
+            <div className="mb-4 space-y-2">
+              <div className="text-[9px] font-bold uppercase tracking-widest text-[#8B949E]">Review incident (black box)</div>
+              <input
+                type="range"
+                min={0}
+                max={incidentTape.length - 1}
+                value={incidentPlaybackIndex}
+                onChange={(e) => onIncidentPlaybackIndex(parseInt(e.target.value, 10))}
+                className="w-full accent-[#F85149] h-2"
+              />
+              <div className="flex justify-between text-[9px] text-[#8B949E] font-mono">
+                <span>T-{Math.round((incidentTape.length - 1 - incidentPlaybackIndex) * 0.1)}s</span>
+                <span>FRAME {incidentPlaybackIndex + 1}/{incidentTape.length}</span>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col gap-2">
-              <button onClick={onResetAndEdit} className="w-full bg-[#F85149]/20 border border-[#F85149] text-[#F85149] py-3 font-bold hover:bg-[#F85149]/30 transition-colors flex items-center justify-center gap-2 text-xs uppercase tracking-widest">
+              <IndustrialPanelKey onClick={onResetAndEdit} className="w-full border-[#F85149]/70 bg-[#F85149]/15 py-3 text-xs text-[#F85149] hover:bg-[#F85149]/25 flex items-center justify-center gap-2">
                   <RotateCcw size={16}/> CLEAR & REVIEW LOGIC
-              </button>
+              </IndustrialPanelKey>
           </div>
         </div>
       </motion.div>
@@ -105,7 +156,7 @@ export const BadgeView = React.memo(({ phases, currentPhase }: { phases: Phase[]
           >
             <div className="flex items-center justify-between mb-2">
               <span className={`text-xs font-mono font-bold tracking-wider ${isActive ? 'text-[#f0f3f6]' : 'text-[#e6edf3]'}`}>
-                {phase.label}
+                {phase.label.startsWith('PHASE_') ? `TRB-${phase.label.slice(6)}` : phase.label}
               </span>
               {isActive && (
                 <span className="text-[10px] bg-[#3FB950] text-[#0D0F12] px-1.5 py-0.5 rounded font-bold animate-pulse">
@@ -159,7 +210,7 @@ export const BadgeView = React.memo(({ phases, currentPhase }: { phases: Phase[]
 
 export const CollapsibleSection = React.memo(({ id, title, isCollapsed, onToggle, children }: { id: string; title: string; isCollapsed: boolean; onToggle: (id: string) => void; children: React.ReactNode; }) => (
   <div className="flex flex-col">
-    <button onClick={() => onToggle(id)} className="flex items-center justify-between text-xs uppercase tracking-widest text-[#C9D1D9] mb-2 border-b border-[#2D333B] pb-1 hover:text-white transition-colors group">
+    <button onClick={() => onToggle(id)} className="group mb-2 flex w-full items-center justify-between border-2 border-b-[3px] border-[#2D333B] bg-[#161B22] px-2 py-1.5 text-xs uppercase tracking-widest text-[#C9D1D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition-colors hover:border-[#3FB950]/45 hover:text-white active:translate-y-px">
       <span className="flex items-center gap-2">
         {isCollapsed ? <ChevronRight className="w-3 h-3 text-[#3FB950]" /> : <ChevronDown className="w-3 h-3 text-[#3FB950]" />}
         {title}
@@ -179,29 +230,93 @@ export const LevelCompleteModal = ({ info, levelId, isLastLevel, onNext, onRetry
   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
     <motion.div initial={{ scale: 0.94, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} className="w-full max-w-md rounded-none border-2 border-[#3FB950] bg-[#0D0F12] shadow-[0_0_30px_rgba(63,185,80,0.15)] overflow-hidden font-mono">
       <div className="bg-[#3FB950] text-[#0D0F12] px-4 py-2 font-bold tracking-widest text-sm flex justify-between">
-        <span>DIRECTIVE COMPLETE</span>
+        <span>REQUISITION VERIFIED</span>
         <span>{levelId}</span>
       </div>
       <div className="p-6">
-        <h2 className="text-[#C9D1D9] text-xl font-bold mb-6 text-center tracking-wider">PERFORMANCE METRICS</h2>
+        <h2 className="text-[#C9D1D9] text-xl font-bold mb-1 text-center tracking-wider">RESOURCE ALLOCATION REPORT</h2>
+        <p className="text-[#8B949E] text-[9px] text-center mb-1 font-mono uppercase tracking-wide">Discharge target satisfied. Safety certification: four consecutive refresh cycles with stable discharge register.</p>
+        <p className="text-[#8B949E] text-[8px] text-center mb-6 font-mono uppercase tracking-wide">Intermittent logic variance voids commendation; this filing passed settle gate.</p>
         <div className="space-y-2">
-          <Histogram title={METRIC.THROUGHPUT} value={info.cycleTime} unit="s" color="#3FB950" min={10} max={120} levelId={levelId} dbColumn="seconds_to_clear" />
-          <Histogram title={METRIC.INSTRUCTION_COUNT} value={info.linesOfCode} unit="LINES" color="#58A6FF" min={2} max={30} levelId={levelId} dbColumn="instruction_count" />
-          <Histogram title={METRIC.HARDWARE_COST} value={info.hardwareCost} unit="¥" color="#D29922" min={100} max={2000} levelId={levelId} dbColumn="hardware_cost" />
+          <Histogram
+            title={METRIC.THROUGHPUT}
+            value={info.cycleTime}
+            unit="s"
+            color="#3FB950"
+            min={10}
+            max={120}
+            levelId={levelId}
+            dbColumn="seconds_to_clear"
+            distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
+          />
+          <Histogram
+            title={METRIC.INSTRUCTION_COUNT}
+            value={info.linesOfCode}
+            unit="SECT"
+            color="#58A6FF"
+            min={2}
+            max={30}
+            levelId={levelId}
+            dbColumn="instruction_count"
+            distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
+          />
+          <Histogram
+            title={METRIC.HARDWARE_COST}
+            value={info.hardwareCost}
+            unit="¥"
+            color="#D29922"
+            min={100}
+            max={2000}
+            levelId={levelId}
+            dbColumn="hardware_cost"
+            distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
+          />
         </div>
         <div className="mt-8 flex gap-3">
-          <button onClick={onRetry} className="flex-1 border border-[#2D333B] bg-black/20 py-2 text-[#C9D1D9] hover:bg-white/5 hover:text-white transition-colors">OPTIMIZE</button>
-          <button onClick={onNext} className="flex-1 bg-[#3FB950]/20 border border-[#3FB950] text-[#3FB950] py-2 font-bold hover:bg-[#3FB950]/30 transition-colors shadow-[0_0_10px_rgba(63,185,80,0.2)]">{isLastLevel ? 'FREEPLAY' : 'NEXT LEVEL'}</button>
+          <IndustrialPanelKey onClick={onRetry} className="flex-1 border-[#2D333B] bg-black/30 py-2 text-[11px] text-[#C9D1D9] hover:border-[#58A6FF]/50 hover:text-white">
+            AMEND FILING
+          </IndustrialPanelKey>
+          <IndustrialPanelKey
+            onClick={onNext}
+            className="flex-1 border-[#3FB950]/70 bg-[#3FB950]/15 py-2 text-[11px] text-[#3FB950] hover:bg-[#3FB950]/28 shadow-[0_0_10px_rgba(63,185,80,0.15)]"
+          >
+            {isLastLevel ? 'OPEN CORRIDOR (UNAUDITED)' : 'NEXT DOCKET'}
+          </IndustrialPanelKey>
         </div>
       </div>
     </motion.div>
   </motion.div>
 );
 
-export const MasterSwitch = ({ isOn, onToggle }: { isOn: boolean; onToggle: () => void }) => {
-  const handleClick = () => { hapticHeavy(); onToggle(); };
+export const MasterSwitch = ({
+  isOn,
+  onToggle,
+  procurementLock = false,
+}: {
+  isOn: boolean;
+  onToggle: () => void;
+  procurementLock?: boolean;
+}) => {
+  const handleClick = () => {
+    if (procurementLock && !isOn) {
+      hapticError();
+      return;
+    }
+    hapticHeavy();
+    onToggle();
+  };
   return (
-    <div onClick={handleClick} className="relative w-20 h-10 sm:w-24 sm:h-12 bg-[#161B22] rounded border-2 border-[#2D333B] shadow-[inset_0_0_15px_rgba(0,0,0,0.8)] cursor-pointer flex items-center p-1 shrink-0">
+    <div
+      onClick={handleClick}
+      className={`relative w-20 h-10 sm:w-24 sm:h-12 bg-[#161B22] rounded border-2 border-[#2D333B] shadow-[inset_0_0_15px_rgba(0,0,0,0.8)] flex items-center p-1 shrink-0 ${
+        procurementLock && !isOn ? 'cursor-not-allowed' : 'cursor-pointer'
+      }`}
+    >
+      {procurementLock && !isOn && (
+        <div className="pointer-events-none absolute inset-0 z-20 m-0.5 rounded-sm border-2 border-[#F85149] bg-[#F85149]/25 shadow-[inset_0_0_12px_rgba(248,81,73,0.35)] flex items-end justify-center pb-0.5">
+          <span className="text-[6px] font-bold tracking-widest text-[#F85149]">PROC_LOCK</span>
+        </div>
+      )}
       <div className="absolute inset-0 flex justify-between items-center px-2 sm:px-3 pointer-events-none font-mono text-[9px] sm:text-[10px] font-bold tracking-widest">
         <span className={isOn ? 'text-[#3FB950] animate-pulse' : 'text-[#8B949E]'}>ON</span>
         <span className={!isOn ? 'text-[#D29922]' : 'text-[#8B949E]'}>OFF</span>
@@ -253,12 +368,45 @@ export const TrafficFlowRates = React.memo(({ rates, isSandbox, onRateChange }: 
   </div>
 ));
 
+export const ProgramCompileError = ({
+  message,
+  helpTab,
+  onOpenManualHelp,
+}: {
+  message: string;
+  helpTab: string | null;
+  onOpenManualHelp: (tab: string) => void;
+}) => {
+  if (!message) return null;
+  return (
+    <div className="flex gap-2 items-start rounded border border-[#F85149]/30 bg-[#F85149]/10 p-2">
+      <div className="min-w-0 flex-1">
+        <div className="mb-1 text-[9px] font-mono font-bold uppercase tracking-wider text-[#F85149]/80">Logic image validation failure</div>
+        <div className="text-[11px] text-[#F85149] font-mono whitespace-pre-wrap leading-tight">{message}</div>
+      </div>
+      {helpTab && (
+        <button
+          type="button"
+          title={`Open manual: ${helpTab}`}
+          onClick={() => {
+            hapticTap();
+            onOpenManualHelp(helpTab);
+          }}
+          className="shrink-0 rounded border border-[#F85149] p-1.5 text-[#F85149] hover:bg-[#F85149]/20"
+        >
+          <CircleHelp size={16} />
+        </button>
+      )}
+    </div>
+  );
+};
+
 export function VehicleInspectTooltip({ vehicle }: { vehicle: Vehicle }) {
   const lane = LANE_MAP.get(vehicle.laneId);
   const movementLabel = lane ? MovementLabels[lane.movement] ?? String(lane.movement) : vehicle.laneId;
   const speed = Math.hypot(vehicle.vx, vehicle.vy);
   const angDeg = (vehicle.angle * 180) / Math.PI;
-  const rows: [string, string][] = [['id', vehicle.id], ['lane', vehicle.laneId], ['movement', movementLabel], ['type', vehicle.vType], ['x', vehicle.x.toFixed(1)], ['y', vehicle.y.toFixed(1)], ['vx', vehicle.vx.toFixed(2)], ['vy', vehicle.vy.toFixed(2)], ['speed', speed.toFixed(2)], ['angleDeg', angDeg.toFixed(1)], ['cruise', vehicle.cruiseSpeed.toFixed(2)], ['accel', vehicle.accel.toFixed(2)], ['decel', vehicle.decel.toFixed(2)], ['brake', String(vehicle.brakeIntensity ?? 0)], ['delay', vehicle.startDelay.toFixed(2)], ['color', vehicle.color], ['size', `${vehicle.length.toFixed(0)}×${vehicle.width.toFixed(0)}`], ['skins', [vehicle.legendarySkin && 'LEG', vehicle.rareSkin && 'RARE'].filter(Boolean).join(' ') || '—']];
+  const rows: [string, string][] = [['rawId', vehicle.id], ['lane', vehicle.laneId], ['movement', movementLabel], ['type', vehicle.vType], ['x', vehicle.x.toFixed(1)], ['y', vehicle.y.toFixed(1)], ['vx', vehicle.vx.toFixed(2)], ['vy', vehicle.vy.toFixed(2)], ['speed', speed.toFixed(2)], ['angleDeg', angDeg.toFixed(1)], ['cruise', vehicle.cruiseSpeed.toFixed(2)], ['accel', vehicle.accel.toFixed(2)], ['decel', vehicle.decel.toFixed(2)], ['brake', String(vehicle.brakeIntensity ?? 0)], ['delay', vehicle.startDelay.toFixed(2)], ['color', vehicle.color], ['size', `${vehicle.length.toFixed(0)}×${vehicle.width.toFixed(0)}`], ['skins', [vehicle.legendarySkin && 'LEG', vehicle.rareSkin && 'RARE'].filter(Boolean).join(' ') || '—']];
   if (vehicle.targetLaneId) rows.push(['targetLane', vehicle.targetLaneId]);
   if (vehicle.isTurning) {
     rows.push(['turn', 'on']);
@@ -269,8 +417,12 @@ export function VehicleInspectTooltip({ vehicle }: { vehicle: Vehicle }) {
   } else { rows.push(['turn', 'off']); }
   return (
     <div className="pointer-events-auto max-h-[min(70vh,420px)] overflow-y-auto rounded border border-[#58A6FF]/50 bg-[#1A1D23]/98 p-3 font-mono text-[11px] text-[#C9D1D9] shadow-2xl scrollbar-hide">
-      <div className="border-b border-[#2D333B] pb-2 text-[10px] font-bold tracking-wider text-[#58A6FF]">VEHICLE STATE</div>
+      <div className="border-b border-[#2D333B] pb-2 text-[10px] font-bold tracking-wider text-[#58A6FF]">UNIT INSPECTION REGISTER</div>
       <div className="mt-2 space-y-1">
+        <div className="flex justify-between gap-6 border-b border-[#2D333B]/40 pb-1">
+          <span className="text-[#8B949E]">UNIT</span>
+          <span className="text-right font-bold text-[#58A6FF]">{formatTransitUnitTag(vehicle.id)}</span>
+        </div>
         {rows.map(([k, val]) => (
           <div key={k} className="flex justify-between gap-6"><span className="text-[#8B949E]">{k}</span><span className="text-right text-[#C9D1D9]">{val}</span></div>
         ))}

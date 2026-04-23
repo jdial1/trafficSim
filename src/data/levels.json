@@ -1,14 +1,14 @@
 [
   {
     "id": "1A",
-    "title": "1A: N/S FLOW",
+    "title": "Requisition 1A — N/S corridor strap",
     "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
     "subject": "DIRECTIVE 82-A: N/S AXIS ALIGNMENT",
-    "body": "Latency on SEC-082 N/S corridor exceeds acceptable thresholds. East/West sensors are temporarily disabled. Establish baseline throughput.",
+    "body": "SEC-082 N/S node latency exceeds municipal flow audit tolerance. East/West ILC-92 heads are strapped out of service for this docket. Establish baseline hourly discharge on the active axis only.",
     "bullets": [
-      "Clear 150 vehicles.",
-      "Maintain N/S priority.",
-      "E/W lanes are strictly offline."
+      "Discharge quota: 150 units from sector tally.",
+      "Maintain N/S mast priority on the lamp bus.",
+      "E/W approaches read open-circuit for this installation site."
     ],
     "hardware": ["SEC-082 BASE LOGIC"],
     "initialCode": "phase(1):\n    NORTH_STRAIGHT.GO\n    SOUTH_STRAIGHT.GO",
@@ -23,19 +23,20 @@
     ],
     "constraints": { "maxPhases": 2, "noConditionals": true },
     "nextLevelId": "1B",
-    "randomSeed": 42
+    "randomSeed": 42,
+    "bureauMemo": "Mayoral district memo: East Street audit window. Hold zero chronic queue dwell on EAST_STRAIGHT (movement 0x0B) during published peak slice or Budget Office opens Form B-19 inquiry."
   },
   {
     "id": "1B",
-    "title": "1B: E/W FLOW",
+    "title": "Requisition 1B — E/W corridor strap",
     "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
     "subject": "DIRECTIVE 82-B: E/W AXIS ALIGNMENT",
-    "body": "N/S sensors have been taken offline for diagnostics. East/West traffic is now backing up into the industrial district. Restore flow without exceeding cycle budget.",
+    "body": "N/S ILC-92 returns are masked for diagnostic burn-in. East/West upstream buffers are backing into the industrial district. Restore mandated discharge without exceeding the thermal duty envelope on the relay shelf.",
     "bullets": [
-      "Clear 250 vehicles.",
-      "Ensure both East and West axes are processed.",
-      "Failure: Gridlock detected.",
-      "Keep East and West traffic isolated to prevent incidents."
+      "Discharge quota: 250 units from sector tally.",
+      "Document minimum discharge on both E and W mast bundles.",
+      "Liability: buffer saturation (ERROR_0x94) posts an incident record.",
+      "Keep E/W movements electrically isolated across macro-slices per Form 12-C."
     ],
     "hardware": [
       "SEC-082 BASE LOGIC CONTROLLER",
@@ -54,19 +55,20 @@
     ],
     "constraints": { "maxPhases": 2, "noConditionals": true },
     "nextLevelId": "1C",
-    "randomSeed": 1337
+    "randomSeed": 1337,
+    "bureauMemo": "Treasury strap: E/W corridor procurement is pre-capped; extra phase banks bill as capital equipment, not O&M. Legal will not backfill unapproved relay shelves."
   },
   {
     "id": "1C",
-    "title": "1C: FULL INTEGRATION",
+    "title": "Requisition 1C — Full compass docket",
     "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
     "subject": "DIRECTIVE 82-C: FULL OPERATION",
-    "body": "Diagnostics complete. All sensors on SEC-082 are active. Congestion is critical. Design a 4-phase cycle to process all directions efficiently. Do not exceed the 60-tick cycle overheat limit.",
+    "body": "Diagnostics closed. All ILC-92 heads on SEC-082 are live. Upstream registers show critical depth. Author a four-bank phase-sequence image that services every strapped approach. Thermal duty sum must remain inside the published synchronization envelope.",
     "bullets": [
-      "Clear 250 vehicles.",
-      "Ensure all four axes maintain minimum flow.",
-      "Failure: Gridlock detected.",
-      "Isolate conflicting movements into discrete phases."
+      "Discharge quota: 250 units from sector tally.",
+      "Each compass shall log minimum discharge per Form 7-B addendum.",
+      "Liability: buffer saturation (ERROR_0x94) posts an incident record.",
+      "Partition incompatible .GO pairs into separate relay slices."
     ],
     "hardware": [
       "SEC-082 MULTIPLEX CONTROLLER",
@@ -76,19 +78,21 @@
     "initialCode": "",
     "winCondition": { "clearCars": 250, "minPerDirection": 75 },
     "constraints": { "maxPhases": 4, "noConditionals": true },
+    "failureConditions": { "maxHardwareCost": 1900 },
     "nextLevelId": "1D",
-    "randomSeed": 2048
+    "randomSeed": 2048,
+    "bureauMemo": "Commissioner nephew holds parcel on North approach; auditors watch NORTH_LEFT dwell. Any ILC spike over 12 units without relief slice triggers Facilities review."
   },
   {
     "id": "1D",
-    "title": "1D: PROTECTED LEFTS",
+    "title": "Requisition 1D — Protected turn banks",
     "from": "OGAS SAFETY DIVISION <safety@bot.gov>",
     "subject": "DIRECTIVE 82-D: LEFT TURN CONFLICT",
-    "body": "Collision data suggests Northbound drivers are failing to yield. Implement a dedicated Left-Turn phase to isolate them from Southbound oncoming traffic.",
+    "body": "Field telemetry shows northbound units failing permissive merge against southbound through discharge. Install dedicated protected-left relay slices so N_LEFT and S_LEFT never share the conflict plane with opposing through vectors on the same macro-slice.",
     "bullets": [
-      "Clear 200 vehicles.",
-      "Ensure North-Left and South-Left have dedicated time.",
-      "Avoid head-on collisions."
+      "Discharge quota: 200 units from sector tally.",
+      "N_LEFT and S_LEFT each receive bank time isolated from opposing through.",
+      "Kinetic overlap (ERROR_0x82) voids warranty; design for annunciator silence."
     ],
     "hardware": ["SEC-082 PHASE SEQUENCER"],
     "initialCode": "phase(1):\n    NORTH_STRAIGHT.GO\n    SOUTH_STRAIGHT.GO\n\nphase(2):\n    # Add Left Turn Logic here",
@@ -103,18 +107,19 @@
     ],
     "constraints": { "maxPhases": 4, "noConditionals": true },
     "nextLevelId": "2A",
-    "randomSeed": 1001
+    "randomSeed": 1001,
+    "bureauMemo": "Protected-turn carve-out is statutory; opposing through vectors must not occupy the same conflict plane macro-slice as N_LEFT / S_LEFT per OGAS 1.4 fault class notes."
   },
   {
     "id": "2A",
-    "title": "2A: THE RUSH HOUR",
+    "title": "Requisition 2A — Asymmetric ingress ROM",
     "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
     "subject": "DIRECTIVE 83-A: ASYMMETRIC LOAD",
-    "body": "Morning commute in effect. Northbound volume is 3x higher than other directions. Adjust phase timings to favor the heavy load.",
+    "body": "Morning peak fused into approach ROM: northbound demand index is triple the other axes. Re-time relay banks so the heavy mast meets discharge quota without starving southbound ILC returns below audit minimums.",
     "bullets": [
-      "Clear 300 vehicles.",
-      "Handle high-density Northbound flow.",
-      "Do not allow Southbound to stall."
+      "Discharge quota: 300 units from sector tally.",
+      "Prioritize northbound bank duty within thermal envelope.",
+      "Southbound minimum discharge remains binding on the docket."
     ],
     "hardware": ["SEC-082 TRAFFIC ANALYZER"],
     "initialCode": "",
@@ -122,18 +127,19 @@
     "trafficWeights": { "N": 0.08, "S": 0.02, "E": 0.02, "W": 0.02 },
     "constraints": { "maxPhases": 4, "noConditionals": true },
     "nextLevelId": "2B",
-    "randomSeed": 2001
+    "randomSeed": 2001,
+    "bureauMemo": "Asymmetric ROM is sealed; tampering with N-demand weight voids the corridor waiver. Southbound minimum discharge remains a binding audit vector."
   },
   {
     "id": "2B",
-    "title": "2B: INDUSTRIAL REPAIR",
+    "title": "Requisition 2B — Thru-lane fuse blow",
     "from": "CITY MAINTENANCE <maint@bot.gov>",
     "subject": "DIRECTIVE 83-B: THRU-LANE CLOSURE",
-    "body": "Utility repairs have blocked all 'Straight' lanes on the East/West axis. Only turning movements are possible. Route vehicles through side streets.",
+    "body": "Utility cutover has blown the east/west through-lane fuses on the as-built schematic. Only left and right vectors are electrically present; discharge must route via turning movements and side-street spill paths.",
     "bullets": [
-      "Clear 200 vehicles.",
-      "Only Left and Right turns are active for E/W.",
-      "Gridlock is a high risk."
+      "Discharge quota: 200 units from sector tally.",
+      "E/W mast: LEFT and RIGHT only; THRU reads open-circuit.",
+      "Buffer saturation risk is elevated — monitor ILC-92 returns."
     ],
     "hardware": ["SEC-082 RE-ROUTING MODULE"],
     "initialCode": "",
@@ -141,108 +147,116 @@
     "closedLanes": ["eb-thru", "wb-thru"],
     "constraints": { "maxPhases": 4, "noConditionals": true },
     "nextLevelId": "2C",
-    "randomSeed": 2002
+    "randomSeed": 2002,
+    "bureauMemo": "Utility cites fuse blow on E/W thru lanes; detour signage is political. Document every turning-phase dwell for Council packet 17-U."
   },
   {
     "id": "2C",
-    "title": "2C: THE PEDESTRIAN BRIDGE",
+    "title": "Requisition 2C — SOR-Walk mandate window",
     "from": "CITIZEN SAFETY COUNCIL <council@bot.gov>",
     "subject": "DIRECTIVE 83-C: CROSSWALK PRIORITY",
-    "body": "The local schools are out. High pedestrian volume requires a dedicated 'All-Walk' phase where all vehicle movement is halted.",
+    "body": "School-dismissal window is fused into corridor ROM. Pedestrian volume requires a dedicated SOR-Walk slice: System Override 0x1A tri-states all vehicular vectors while crosswalk IDs 0x0D–0x10 assert. Municipal flow audit still applies once discharge resumes.",
     "bullets": [
-      "Clear 250 vehicles.",
-      "Use EXCLUSIVE_PEDESTRIAN_PHASE.",
-      "Achieve throughput despite pedestrian delays."
+      "Discharge quota: 250 units from sector tally.",
+      "Assert EXCLUSIVE_PEDESTRIAN_PHASE.GO per Mandate 44-B.",
+      "Minimize municipal flow audit inflation from override dwell."
     ],
     "hardware": ["SEC-082 CROSSWALK CONTROLLER"],
     "initialCode": "phase(1):\n    EXCLUSIVE_PEDESTRIAN_PHASE.GO",
     "winCondition": { "clearCars": 250, "minPerDirection": 50 },
     "constraints": { "maxPhases": 6, "noConditionals": true },
     "nextLevelId": "3A",
-    "randomSeed": 2003
+    "randomSeed": 2003,
+    "bureauMemo": "SOR-Walk mandate is clocked; extended vehicular green during override posts to School Board docket. Keep override macro-slices short on paper."
   },
   {
     "id": "3A",
-    "title": "3A: PERMISSIVE FLOW",
+    "title": "Requisition 3A — PLGA permissive merge",
     "from": "ENGINEERING DEPT <eng@bot.gov>",
     "subject": "DIRECTIVE 84-A: THE YIELD PROTOCOL",
-    "body": "Efficiency is low. Instead of strict green lights, use .YIELD commands for right turns and left turns to allow movement during gaps in traffic.",
+    "body": "Node efficiency audit is below target. Where geometry permits, arm permissive .YIELD on turning vectors so PLGA gap logic negotiates discharge against streams already granted green-compatible lamps, instead of isolating every conflict in extra relay banks.",
     "bullets": [
-      "Clear 300 vehicles.",
-      "Utilize .YIELD for at least two movements.",
-      "Reduce average wait time."
+      "Discharge quota: 300 units from sector tally.",
+      "Minimum two movements shall use .YIELD on the lamp bus.",
+      "Reduce approach chronograph wait without tripping thermal duty."
     ],
     "hardware": ["SEC-082 LOGIC GATE v2"],
     "initialCode": "phase(1):\n    NORTH_STRAIGHT.GO\n    SOUTH_STRAIGHT.GO\n    NORTH_RIGHT.YIELD",
     "winCondition": { "clearCars": 300 },
     "constraints": { "maxPhases": 4, "noConditionals": true },
     "nextLevelId": "3B",
-    "randomSeed": 3001
+    "randomSeed": 3001,
+    "bureauMemo": "PLGA gap logic is authorized only where geometry yields non-zero lateral clearance; do not cite revoked Operator Miller EEPROM dumps in incident defense."
   },
   {
     "id": "3B",
-    "title": "3B: SENSOR ACTIVATION",
+    "title": "Requisition 3B — ILC-92 comparator install",
     "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
     "subject": "DIRECTIVE 84-B: DYNAMIC ROUTING",
-    "body": "Your hardware has been upgraded with queue sensors. Use 'if' statements to trigger special phases only when specific lanes are backed up.",
+    "body": "Field kit now includes additional Physical Sensor Head Requisitions. Author comparator arms (if (QUEUE…)) that clock phase_insert micro-slices only when the ILC-92 return exceeds your literal threshold — each arm bills against corridor BOM.",
     "bullets": [
-      "Clear 350 vehicles.",
-      "Use if(QUEUE.NORTH_LEFT > 5) logic.",
-      "Reduce hardware overheating by minimizing active phases."
+      "Discharge quota: 350 units from sector tally.",
+      "Deploy at least one QUEUE comparator + phase_insert pair (e.g. NORTH_LEFT depth).",
+      "Limit relay bank count to keep thermal duty inside envelope."
     ],
     "hardware": ["SEC-082 SENSOR INTERFACE"],
     "initialCode": "phase(1):\n    NORTH_STRAIGHT.GO\n    SOUTH_STRAIGHT.GO\n\nphase(2):\n    EAST_STRAIGHT.GO\n    WEST_STRAIGHT.GO\n\nif (QUEUE.NORTH_LEFT > 5):\n    phase_insert(NORTH_LEFT.GO)",
     "winCondition": { "clearCars": 350 },
     "constraints": { "maxPhases": 4, "noConditionals": false },
+    "failureConditions": { "maxHardwareCost": 1680 },
     "nextLevelId": "3C",
-    "randomSeed": 3002
+    "randomSeed": 3002,
+    "bureauMemo": "Each QUEUE comparator arm bills as Class-B sensor head; Procurement caps this corridor BOM below standard multiplex allowance."
   },
   {
     "id": "3C",
-    "title": "3C: THE SPLIT PHASE",
+    "title": "Requisition 3C — Split mast sequencing",
     "from": "OGAS SAFETY DIVISION <safety@bot.gov>",
     "subject": "DIRECTIVE 84-C: HEAVY TRUCK CORRIDOR",
-    "body": "Large trucks from the West are causing accidents when turning. Implement a 'Split Phase' where West goes entirely (Left, Straight, Right) followed by East.",
+    "body": "Westbound heavy-class envelopes are tripping kinetic overlap in shared E/W slices. Implement split-bank sequencing: one full relay slice services W_LEFT, W_STRAIGHT, and W_RIGHT; a separate slice services the east mast. No simultaneous hard .GO on opposing E/W vectors in the same macro-slice.",
     "bullets": [
-      "Clear 250 vehicles.",
-      "Isolate WB flow from EB flow entirely.",
-      "No concurrent E/W movement allowed."
+      "Discharge quota: 250 units from sector tally.",
+      "West mast discharges in isolation from east mast.",
+      "Concurrent E/W hard .GO on the same macro-slice is not indemnified."
     ],
     "hardware": ["SEC-082 HEAVY DUTY RELAYS"],
     "initialCode": "",
     "winCondition": { "clearCars": 250, "minPerDirection": 50 },
     "constraints": { "maxPhases": 6, "noConditionals": false },
     "nextLevelId": "4A",
-    "randomSeed": 3003
+    "randomSeed": 3003,
+    "bureauMemo": "West mast heavy envelopes flagged; split-bank evidence must show zero simultaneous opposing E/W hard .GO within one macro-slice."
   },
   {
     "id": "4A",
-    "title": "4A: THE DIAMOND",
+    "title": "Requisition 4A — Eight-bank multiplex",
     "from": "BUREAU OF TRANSPORTATION <dir-req@bot.gov>",
     "subject": "DIRECTIVE 85-A: 8-PHASE CHALLENGE",
-    "body": "Critical congestion. All lanes are active. All volumes are high. You must design a perfect 8-phase rotation or the system will crash from overflow.",
+    "body": "All twelve vehicular vectors are strapped live; ingress indices are pegged high across compasses. Author an eight-bank rotation that keeps the conflict matrix satisfied and ILC buffers below the published ERROR_0x94 halt depth. Thermal shunt (ERROR_0xAF) is one relay budget mistake away.",
     "bullets": [
-      "Clear 500 vehicles.",
-      "Process all 12 movements.",
-      "System overflow will occur at 15 vehicles in queue."
+      "Discharge quota: 500 units from sector tally.",
+      "Service every strapped vehicular movement over the audit window.",
+      "Buffer saturation (ERROR_0x94) trips when any single approach buffer exceeds the halt depth in §1.4."
     ],
     "hardware": ["SEC-082 MULTIPLEXER"],
     "initialCode": "",
     "winCondition": { "clearCars": 500, "minPerDirection": 75 },
     "constraints": { "maxPhases": 8, "noConditionals": false },
+    "failureConditions": { "maxHardwareCost": 1850 },
     "nextLevelId": "4B",
-    "randomSeed": 4001
+    "randomSeed": 4001,
+    "bureauMemo": "Eight-bank multiplex is capital-grade; thermal shunt (ERROR_0xAF) voids warranty if green-sum exceeds synchronization envelope even once."
   },
   {
     "id": "4B",
-    "title": "4B: EMERGENCY CORRIDOR",
+    "title": "Requisition 4B — Priority comparator corridor",
     "from": "OGAS SAFETY DIVISION <safety@bot.gov>",
     "subject": "DIRECTIVE 85-B: HOSPITAL ACCESS",
-    "body": "The Southbound corridor is now an emergency route. It must remain clear. Use sensors to purge Southbound queues the moment they exceed 2 vehicles.",
+    "body": "Southbound strap is designated EMS ingress. ILC-92 returns on SOUTH_STRAIGHT shall not dwell in the red band: use comparator-driven phase_insert to purge southbound depth the moment the coprocessor return exceeds two units. Bureau memo caps sustained southbound queue display at five units for this docket.",
     "bullets": [
-      "Clear 400 vehicles.",
-      "Priority: SOUTH_STRAIGHT.",
-      "Southbound queue must stay below 5 at all times."
+      "Discharge quota: 400 units from sector tally.",
+      "Primary audit vector: SOUTH_STRAIGHT discharge continuity.",
+      "Keep SOUTH_STRAIGHT ILC return below five units under nominal demand."
     ],
     "hardware": ["SEC-082 PRIORITY OVERRIDE"],
     "initialCode": "",
@@ -250,17 +264,18 @@
     "trafficWeights": { "N": 0.03, "S": 0.08, "E": 0.03, "W": 0.03 },
     "constraints": { "maxPhases": 4, "noConditionals": false },
     "nextLevelId": "sandbox",
-    "randomSeed": 4002
+    "randomSeed": 4002,
+    "bureauMemo": "EMS strap memo: southbound queue display capped at five units nominal; sustained overrun opens Hospital Liaison ticket HL-22."
   },
   {
     "id": "sandbox",
-    "title": "SANDBOX",
+    "title": "SVE — off-grid validation rack",
     "from": "OGAS ENGINEERING <eng@ogas.gov>",
-    "subject": "SEC-082 SANDBOX (UNSCORED)",
-    "body": "Freeplay environment enabled. All sensors and overrides are unlocked. Use this workspace to test traffic profiles before filing scored directives.",
+    "subject": "SEC-082 SVE / UNSCORED PARTITION",
+    "body": "Simulated Validation Environment partition mounted. All ILC-92 heads and relay shelves are provisioned without procurement caps. Burn phase-sequence images here before filing scored corridor dockets; Bureau ledger does not ingest SVE logs.",
     "bullets": [
-      "No win condition.",
-      "Adjust traffic flow manually."
+      "No mandated discharge quota.",
+      "Adjust demand curves and logic images manually."
     ],
     "hardware": [
       "DEVELOPMENT KIT",
@@ -268,6 +283,7 @@
     ],
     "initialCode": "",
     "winCondition": { "clearCars": 0 },
-    "isSandbox": true
+    "isSandbox": true,
+    "bureauMemo": "SVE partition carries no procurement ceiling; scored corridor burns must still file on hardware BOM before audit upload."
   }
 ]

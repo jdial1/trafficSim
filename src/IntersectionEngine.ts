@@ -11,6 +11,7 @@ export interface SkidMarkSegment {
 export interface CrashInfo {
   x: number; y: number; laneA: string; laneB: string; vehicleIds: [string, string]; type?: 'COLLISION' | 'OVERHEAT' | 'OVERFLOW';
   laneCongestion?: Record<string, number>;
+  conflictRays?: { x0: number; y0: number; x1: number; y1: number }[];
 }
 
 export type PathGeometry = 
@@ -72,7 +73,30 @@ export function detectCrash(vehicles: Vehicle[]): CrashInfo | null {
       const b = vehicles[j]; if (!inI(b)) continue;
       const dx = a.x - b.x; const dy = a.y - b.y;
       const cD = (Math.max(a.width, a.length) + Math.max(b.width, b.length)) * 0.3;
-      if ((dx * dx + dy * dy) <= cD * cD) return { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5, laneA: a.laneId, laneB: b.laneId, vehicleIds: [a.id, b.id] };
+      if ((dx * dx + dy * dy) <= cD * cD) {
+        const magA = Math.hypot(a.vx, a.vy);
+        const magB = Math.hypot(b.vx, b.vy);
+        const len = 200;
+        const uax = magA > 1e-4 ? a.vx / magA : Math.cos(a.angle);
+        const uay = magA > 1e-4 ? a.vy / magA : Math.sin(a.angle);
+        const ubx = magB > 1e-4 ? b.vx / magB : Math.cos(b.angle);
+        const uby = magB > 1e-4 ? b.vy / magB : Math.sin(b.angle);
+        const cx = (a.x + b.x) * 0.5;
+        const cy = (a.y + b.y) * 0.5;
+        return {
+          x: cx,
+          y: cy,
+          laneA: a.laneId,
+          laneB: b.laneId,
+          vehicleIds: [a.id, b.id],
+          conflictRays: [
+            { x0: a.x, y0: a.y, x1: a.x + uax * len, y1: a.y + uay * len },
+            { x0: b.x, y0: b.y, x1: b.x + ubx * len, y1: b.y + uby * len },
+            { x0: cx - uax * 40, y0: cy - uay * 40, x1: cx + uax * 120, y1: cy + uay * 120 },
+            { x0: cx - ubx * 40, y0: cy - uby * 40, x1: cx + ubx * 120, y1: cy + uby * 120 },
+          ],
+        };
+      }
     }
   }
   return null;

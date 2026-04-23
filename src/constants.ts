@@ -16,6 +16,8 @@ export const MIN_PHASE_GREEN_SECONDS = intersectionData.minPhaseGreenSeconds;
 
 export const MAX_TOTAL_LOOP_SECONDS = intersectionData.maxTotalLoopSeconds;
 
+export const GRIDLOCK_QUEUE_HALT_THRESHOLD = 18;
+
 export const DEFAULT_BUILTIN_PHASE_TIMINGS: number[] = [15, 15, 10, 10];
 
 export function clampPhaseTimingsToLoopCap(values: number[], phaseCount: number): number[] {

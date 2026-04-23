@@ -44,6 +44,15 @@ export const vibrate = (p: number | number[]) => {
   } catch {}
 };
 export const hapticTap = () => vibrate(10);
+
+export function formatTransitUnitTag(id: string): string {
+  if (id === '—') return id;
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  const n = (Math.abs(h) % 900) + 100;
+  const pref = ['RU', 'RV', 'TM', 'QX'][Math.abs(h >> 8) % 4];
+  return `${pref}-${n}`;
+}
 export const hapticDrag = () => vibrate(5);
 export const hapticHeavy = () => vibrate([30, 50, 30]);
 export const hapticError = () => vibrate([80, 50, 80]);

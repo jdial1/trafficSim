@@ -34,6 +34,7 @@ export interface BriefingContent {
   randomSeed?: number;
   nextLevelId?: string;
   isSandbox?: boolean;
+  bureauMemo?: string;
 }
 
 export enum Movement {
@@ -95,6 +96,25 @@ export interface Vehicle {
   brakeIntensity?: number;
   originDir: 'N' | 'S' | 'E' | 'W';
 }
+
+export type IncidentVehicleSnap = Pick<
+  Vehicle,
+  | 'id'
+  | 'x'
+  | 'y'
+  | 'angle'
+  | 'vx'
+  | 'vy'
+  | 'laneId'
+  | 'length'
+  | 'width'
+  | 'vType'
+  | 'color'
+  | 'cruiseSpeed'
+  | 'originDir'
+>;
+
+export type IncidentFrame = { vehicles: IncidentVehicleSnap[] };
 
 export interface Lane {
   id: string;

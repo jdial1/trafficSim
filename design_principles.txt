@@ -7,7 +7,15 @@ The player is a low-level engineer operating a retro-futuristic traffic controll
 
     No "Gamey" UI: Eliminate traditional game menus, "Level Up" screens, or cartoonish pop-ups. If a UI element cannot be justified as a physical button, an LED array, or a CRT text readout on a 1980s control board, it does not belong.
 
-    The Manual is the Tutorial: Do not use intrusive, hand-holding tooltips. Teach the player through the diegetic ManualOverlay. The satisfaction comes from reading the documentation and having the "Aha!" moment.
+    The Manual is the Tutorial: Do not use intrusive, hand-holding tooltips. Teach the player through the diegetic ManualOverlay. The satisfaction comes from reading the documentation and having the "Aha!" moment. Manual copy must pass the Zachtronics treatment:
+
+        Industrial Datasheet Voice: The manual is a datasheet for a 1980s/1990s industrial microcontroller, not product copy for a web app. Purge web-development terminology, framework names, and consumer-software idioms from manual text.
+
+        Requisition Guidelines: Present formulas, ratios, and numeric thresholds as corporate policy. Treat equations and constraints as titled requisition guidelines or bureau operational limits, not homework-style math blocks.
+
+        Hardware Revisions Over the Network: Frame step-by-step teaching and newly enabled capabilities as hardware revisions the Bureau authorizes and pushes to this installation. The player is not unlocking game mechanics; the terminal is receiving certified kit or firmware uplift.
+
+        Margin Scribbles: Use handwritten-style margin notes for a human layer—fictional coworkers venting about traffic, overtime, or flaky hardware—while the body text stays cold, institutional, and precise.
 
     Aesthetic Brutalism: Stick to the established palette (Dark grays, terminal green, amber, harsh red). Use monospace fonts exclusively.
 
@@ -66,3 +74,5 @@ Implementation Checklist for Developers:
     Does the player pass the level by just waiting? -> Enforce a strict time or budget constraint.
 
     Is the screen too cluttered? -> Move passive data to a secondary tab. Keep the active workspace clean.
+
+    Does the manual sound like web documentation? -> Industrial microcontroller datasheet tone only; math as requisition guidelines; progression as Bureau hardware revisions; personality confined to margin scribbles, not the main spec.

@@ -21,6 +21,7 @@ export class BriefingParser {
       ...briefing,
       body: this.parse(briefing.body, dynamicValues),
       bullets: briefing.bullets.map(b => this.parse(b, dynamicValues)),
+      bureauMemo: briefing.bureauMemo ? this.parse(briefing.bureauMemo, dynamicValues) : undefined,
     };
   }
 }

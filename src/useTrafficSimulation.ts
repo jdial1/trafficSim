@@ -6,11 +6,11 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Save, Plus, Minus, Trash2, Download, Mail, Terminal, Map as MapIcon } from 'lucide-react';
-import { Movement, Vehicle, Lane, LightState, MovementTiming, VehicleType, LogEntry, HistoryEntry, QueueHistoryEntry, BriefingContent, level1Briefing } from './types';
+import { Movement, Vehicle, Lane, LightState, MovementTiming, VehicleType, LogEntry, HistoryEntry, QueueHistoryEntry, BriefingContent, level1Briefing, IncidentFrame, IncidentVehicleSnap } from './types';
 import { parseTrafficProgram, Phase, ConditionalRule, PhaseCommand, KEYWORD_MAP } from './interpreter';
 import { PRNG } from './utils/prng';
 import { LevelManager } from './LevelManager';
-import { CANVAS_SIZE, INTERSECTION_SIZE, LANE_WIDTH, LANES, DEFAULT_TIMINGS, DEFAULT_PHASE_GREEN_SECONDS, DEFAULT_BUILTIN_PHASE_TIMINGS, BASE_SPAWN_RATE, SPAWN_DRIFT_SPEED, MIN_PHASE_GREEN_SECONDS, MAX_TOTAL_LOOP_SECONDS, clampPhaseTimingsToLoopCap, SIDEBAR_DEFAULT_WIDTH, ZOOM_STEP, MOBILE_SPLIT_HANDLE_PX, MOBILE_COLLAPSED_STRIP_PX, MOBILE_SPLIT_MAX_RATIO, HEAT_GRID_COLS, HEAT_GRID_ROWS, LOOP_LAG_LOG_MS, LOOP_HUD_MIN_INTERVAL_MS, MAX_SIM_INTEGRATION_STEP, LEGENDARY_SPAWN_CHANCE, LANE_MAP, LEFT_LANE_IDS, ADJACENT_RIGHT_MERGE_PAIR_KEYS, ADJACENT_LEFT_MERGE_PAIR_KEYS, STOP_LINE, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, HEATMAP_DECAY, HEATMAP_GAIN, HEATMAP_MAX, SKID_MARK_BRAKE_THRESHOLD, SKID_MARK_TTL_MS, MAX_SKID_MARK_SEGMENTS, BASE_SAFE_GAP, VEHICLE_COLORS } from './constants';
+import { CANVAS_SIZE, INTERSECTION_SIZE, LANE_WIDTH, LANES, DEFAULT_TIMINGS, DEFAULT_PHASE_GREEN_SECONDS, DEFAULT_BUILTIN_PHASE_TIMINGS, BASE_SPAWN_RATE, SPAWN_DRIFT_SPEED, MIN_PHASE_GREEN_SECONDS, MAX_TOTAL_LOOP_SECONDS, GRIDLOCK_QUEUE_HALT_THRESHOLD, clampPhaseTimingsToLoopCap, SIDEBAR_DEFAULT_WIDTH, ZOOM_STEP, MOBILE_SPLIT_HANDLE_PX, MOBILE_COLLAPSED_STRIP_PX, MOBILE_SPLIT_MAX_RATIO, HEAT_GRID_COLS, HEAT_GRID_ROWS, LOOP_LAG_LOG_MS, LOOP_HUD_MIN_INTERVAL_MS, MAX_SIM_INTEGRATION_STEP, LEGENDARY_SPAWN_CHANCE, LANE_MAP, LEFT_LANE_IDS, ADJACENT_RIGHT_MERGE_PAIR_KEYS, ADJACENT_LEFT_MERGE_PAIR_KEYS, STOP_LINE, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, HEATMAP_DECAY, HEATMAP_GAIN, HEATMAP_MAX, SKID_MARK_BRAKE_THRESHOLD, SKID_MARK_TTL_MS, MAX_SKID_MARK_SEGMENTS, BASE_SAFE_GAP, VEHICLE_COLORS } from './constants';
 import { useGlobalState } from './GlobalStateContext';
 import { loadSession, saveSession, narrowViewport, defaultZoom, MovementLabels, DIRECTIONS, getDirection, getMovementIcon, formatActiveMovements, hapticCrash, hapticHeavy, hapticError, playThunk, startAtmosphericHum, stopAtmosphericHum, type TimeScale } from './traffic';
 import { IntersectionEngine, CrashInfo, RearTires, SkidMarkSegment, pickVehicleAtCanvasPoint, getPathEndPoint, renderVehicleSprite, getPathGeometry, getRearTirePositions } from './IntersectionEngine';
@@ -19,6 +19,43 @@ import { Histogram, ManualOverlay, LevelSelect, GameIntro, FirmwareUpdatePrompt 
 import vehicleCatalog from './data/vehicles.json';
 
 let sysBootLogged = false;
+
+const docketFatalStorageKey = (levelId: string) => `traffic_docket_fatal_${levelId}`;
+
+const snapVehicles = (vehicles: Vehicle[]): IncidentVehicleSnap[] =>
+  vehicles.map((v) => ({
+    id: v.id,
+    x: v.x,
+    y: v.y,
+    angle: v.angle,
+    vx: v.vx,
+    vy: v.vy,
+    laneId: v.laneId,
+    length: v.length,
+    width: v.width,
+    vType: v.vType,
+    color: v.color,
+    cruiseSpeed: v.cruiseSpeed,
+    originDir: v.originDir,
+  }));
+
+const collisionConflictRays = (a: Vehicle, b: Vehicle) => {
+  const magA = Math.hypot(a.vx, a.vy);
+  const magB = Math.hypot(b.vx, b.vy);
+  const len = 200;
+  const uax = magA > 1e-4 ? a.vx / magA : Math.cos(a.angle);
+  const uay = magA > 1e-4 ? a.vy / magA : Math.sin(a.angle);
+  const ubx = magB > 1e-4 ? b.vx / magB : Math.cos(b.angle);
+  const uby = magB > 1e-4 ? b.vy / magB : Math.sin(b.angle);
+  const cx = (a.x + b.x) * 0.5;
+  const cy = (a.y + b.y) * 0.5;
+  return [
+    { x0: a.x, y0: a.y, x1: a.x + uax * len, y1: a.y + uay * len },
+    { x0: b.x, y0: b.y, x1: b.x + ubx * len, y1: b.y + uby * len },
+    { x0: cx - uax * 40, y0: cy - uay * 40, x1: cx + uax * 120, y1: cy + uay * 120 },
+    { x0: cx - ubx * 40, y0: cy - uby * 40, x1: cx + ubx * 120, y1: cy + uby * 120 },
+  ];
+};
 
 export function useTrafficSimulation() {
   const { unlockedLevels, unlockLevel, saveSolution, saveHighscore } = useGlobalState();
@@ -45,6 +82,10 @@ export function useTrafficSimulation() {
     N: BASE_SPAWN_RATE, S: BASE_SPAWN_RATE, E: BASE_SPAWN_RATE, W: BASE_SPAWN_RATE
   });
   const [offScreenQueues, setOffScreenQueues] = useState<Record<string, number>>({});
+  const offScreenQueuesRef = useRef<Record<string, number>>({});
+  useEffect(() => {
+    offScreenQueuesRef.current = offScreenQueues;
+  }, [offScreenQueues]);
   const [isAdaptive, setIsAdaptive] = useState(true);
   
   // UI State
@@ -67,6 +108,7 @@ export function useTrafficSimulation() {
   const sessionCarsByDirRef = useRef({ N: 0, S: 0, E: 0, W: 0 });
   const sessionTimeRef = useRef(0);
   const directiveWonRef = useRef(false);
+  const winSettleRef = useRef(0);
   const [activeLevelId, setActiveLevelId] = useState('1A');
   const currentLevel = useMemo(() => level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0], [activeLevelId]);
 
@@ -77,6 +119,41 @@ export function useTrafficSimulation() {
   const handleEditorDidMount = useCallback((editor: any, monacoNs: any) => {
     editorRef.current = editor;
     setMonaco(monacoNs);
+    editor.updateOptions({
+      minimap: { enabled: false },
+      lineNumbers: 'off',
+      glyphMargin: false,
+      folding: false,
+      lineDecorationsWidth: 0,
+      overviewRulerLanes: 0,
+      hideCursorInOverviewRuler: true,
+      occurrencesHighlight: 'off',
+      selectionHighlight: false,
+      renderLineHighlight: 'none',
+      fontSize: 13,
+      fontFamily: 'JetBrains Mono, Consolas, monospace',
+      letterSpacing: 0,
+      lineHeight: Math.round(13 * 1.22),
+      wordWrap: 'on',
+      wrappingIndent: 'none',
+      scrollBeyondLastLine: false,
+      quickSuggestions: false,
+      parameterHints: { enabled: false },
+      suggestOnTriggerCharacters: false,
+      acceptSuggestionOnCommitCharacter: false,
+      wordBasedSuggestions: 'off',
+      snippetSuggestions: 'none',
+      contextmenu: false,
+      mouseWheelZoom: false,
+      smoothScrolling: false,
+      cursorBlinking: 'solid',
+      cursorStyle: 'block',
+      renderWhitespace: 'none',
+      bracketPairColorization: { enabled: false },
+      padding: { top: 8, bottom: 8 },
+      automaticLayout: true,
+      hover: { enabled: false },
+    });
   }, []);
 
   useEffect(() => {
@@ -225,6 +302,12 @@ export function useTrafficSimulation() {
     hardwareCost: number;
   } | null>(null);
   const [isManualOpen, setIsManualOpen] = useState(false);
+  const [manualInitialTab, setManualInitialTab] = useState<string | null>(null);
+  const openManual = useCallback((tab?: string) => {
+    setManualInitialTab(tab ?? null);
+    setIsManualOpen(true);
+  }, []);
+  const clearManualInitialTab = useCallback(() => setManualInitialTab(null), []);
   const [installDeferred, setInstallDeferred] = useState<PwaInstallPromptEvent | null>(() =>
     typeof window !== 'undefined' ? getPwaInstallDeferred() : null,
   );
@@ -269,6 +352,19 @@ export function useTrafficSimulation() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [userTemplate, setUserTemplate] = useState(() => localStorage.getItem('traffic_user_template') || '');
 
+  const hardwareBudget = useMemo(() => {
+    if (!currentLevel || currentLevel.isSandbox) {
+      return { rawBom: 0, ceiling: 999999, procurementBlocked: false, queueSensorCount: 0, phaseCount: 0 };
+    }
+    const hwJoined = (currentLevel.hardware ?? []).join('');
+    const phaseFromCode = (programCode.match(/phase\(/g) || []).length;
+    const phaseCount = compiledPhases.length > 0 ? compiledPhases.length : Math.max(phaseFromCode, 1);
+    const queueSensorCount = (programCode.match(/if\s*\(\s*QUEUE\./gi) || []).length;
+    const rawBom = hwJoined.length * 8 + phaseCount * 110 + queueSensorCount * 95;
+    const ceiling = currentLevel.failureConditions?.maxHardwareCost ?? 2000;
+    return { rawBom, ceiling, procurementBlocked: rawBom > ceiling, queueSensorCount, phaseCount };
+  }, [currentLevel, programCode, compiledPhases.length]);
+
   const [cmdDir, setCmdDir] = useState<string>('');
   const [cmdTurn, setCmdTurn] = useState<string>('');
 
@@ -307,12 +403,18 @@ export function useTrafficSimulation() {
   }, [cmdDir, cmdTurn]);
 
   const appendPhase = useCallback(() => {
+    const maxP = currentLevel?.constraints?.maxPhases;
+    const existing = (programCode.match(/phase\(/g) || []).length;
+    if (maxP != null && existing >= maxP) {
+      addToast('RACK_OVERFLOW: Phase rack at authorized slot count.', 'info');
+      return;
+    }
     setProgramCode(prev => {
         const trimmed = prev.replace(/\s+$/, '');
         const nextPhase = (prev.match(/phase\(/g) || []).length + 1;
         return trimmed + (trimmed ? '\n\n' : '') + `phase(${nextPhase}):\n`;
     });
-  }, []);
+  }, [currentLevel, programCode, addToast]);
 
   const deleteLastLine = useCallback(() => {
     setProgramCode(prev => {
@@ -426,6 +528,10 @@ export function useTrafficSimulation() {
   const requestRef = useRef<number>(null);
   const lastTimeRef = useRef<number>(null);
   const crashDetectedRef = useRef(false);
+  const incidentBufferRef = useRef<IncidentFrame[]>([]);
+  const lastIncidentSampleTimeRef = useRef(0);
+  const [incidentTape, setIncidentTape] = useState<IncidentFrame[] | null>(null);
+  const [incidentPlaybackIndex, setIncidentPlaybackIndex] = useState(0);
   const loopUpdateSectionsRef = useRef<Record<string, number>>({});
   const loopDrawSectionsRef = useRef<Record<string, number>>({});
   const loopTotalMsWindowRef = useRef<number[]>([]);
@@ -550,6 +656,7 @@ export function useTrafficSimulation() {
             laneB: b.laneId,
             vehicleIds: [a.id, b.id],
             type: 'COLLISION',
+            conflictRays: collisionConflictRays(a, b),
           };
         }
       }
@@ -926,7 +1033,7 @@ export function useTrafficSimulation() {
     return () => clearInterval(interval);
   }, [isPlaying, timeScale, activeLevelId, currentLevel]);
 
-  const update = useCallback((time: number, simStep: number) => {
+  const update = useCallback((time: number, simStep: number, integrationFrameLead = false) => {
     const u = loopUpdateSectionsRef.current;
     for (const k of Object.keys(u)) delete u[k];
     let m = performance.now();
@@ -1247,21 +1354,90 @@ export function useTrafficSimulation() {
     if (skidMarksRef.current.length > MAX_SKID_MARK_SEGMENTS) {
       skidMarksRef.current.splice(0, skidMarksRef.current.length - MAX_SKID_MARK_SEGMENTS);
     }
+    if (isPlayingRef.current && !crashDetectedRef.current) {
+      if (time - lastIncidentSampleTimeRef.current >= 100) {
+        lastIncidentSampleTimeRef.current = time;
+        incidentBufferRef.current.push({ vehicles: snapVehicles(vehicles) });
+        if (incidentBufferRef.current.length > 50) incidentBufferRef.current.shift();
+      }
+    }
     if (!crashDetectedRef.current) {
-      const collision = detectCrash(vehicles);
-      if (collision) {
+      const phaseCount = compiledPhases.length > 0 ? compiledPhases.length : 4;
+      let greenSum = 0;
+      for (let i = 0; i < phaseCount; i++) greenSum += phaseTimings[i] ?? DEFAULT_PHASE_GREEN_SECONDS;
+      if (greenSum > MAX_TOTAL_LOOP_SECONDS) {
         crashDetectedRef.current = true;
-        setCrashInfo(collision);
-        setSessionCrashes(prev => prev + 1);
+        setIncidentTape([{ vehicles: snapVehicles(vehicles) }]);
+        setIncidentPlaybackIndex(0);
+        incidentBufferRef.current = [];
+        setCrashInfo({
+          x: CANVAS_SIZE * 0.5,
+          y: CANVAS_SIZE * 0.5,
+          laneA: 'RELAY_BANK',
+          laneB: 'LOOP_TIMER',
+          vehicleIds: ['—', '—'],
+          type: 'OVERHEAT',
+        });
+        setSessionCrashes((prev) => prev + 1);
         setIsCrashModalMinimized(false);
         isPlayingRef.current = false;
         setIsPlaying(false);
-        addLog('CRASH DETECTED', 'var(--red)');
+        addLog('THERMAL_GUARD_TRIP', 'var(--red)');
         hapticCrash();
+      } else {
+        const qSnap = offScreenQueuesRef.current;
+        for (const lane of LANES) {
+          if (currentLevel?.closedLanes?.includes(lane.id)) continue;
+          const q = qSnap[lane.id] || 0;
+          if (q >= GRIDLOCK_QUEUE_HALT_THRESHOLD) {
+            crashDetectedRef.current = true;
+            setIncidentTape([{ vehicles: snapVehicles(vehicles) }]);
+            setIncidentPlaybackIndex(0);
+            incidentBufferRef.current = [];
+            setCrashInfo({
+              x: CANVAS_SIZE * 0.5,
+              y: CANVAS_SIZE * 0.5,
+              laneA: lane.id,
+              laneB: 'BUFFER_OVERFLOW',
+              vehicleIds: ['—', '—'],
+              type: 'OVERFLOW',
+              laneCongestion: { ...qSnap },
+            });
+            setSessionCrashes((prev) => prev + 1);
+            setIsCrashModalMinimized(false);
+            isPlayingRef.current = false;
+            setIsPlaying(false);
+            addLog('QUEUE_GUARD_TRIP', 'var(--red)');
+            hapticCrash();
+            break;
+          }
+        }
+        if (!crashDetectedRef.current) {
+          const collision = detectCrash(vehicles);
+          if (collision) {
+            crashDetectedRef.current = true;
+            const finalSnap = snapVehicles(vehicles);
+            setIncidentTape([...incidentBufferRef.current, { vehicles: finalSnap }]);
+            setIncidentPlaybackIndex(incidentBufferRef.current.length);
+            incidentBufferRef.current = [];
+            try {
+              sessionStorage.setItem(docketFatalStorageKey(activeLevelId), '1');
+            } catch {
+              /* ignore */
+            }
+            setCrashInfo(collision);
+            setSessionCrashes((prev) => prev + 1);
+            setIsCrashModalMinimized(false);
+            isPlayingRef.current = false;
+            setIsPlaying(false);
+            addLog('CONFLICT_PLANE_TRIP', 'var(--red)');
+            hapticCrash();
+          }
+        }
       }
     }
     if (
-      newlyCleared > 0 &&
+      integrationFrameLead &&
       !crashDetectedRef.current &&
       !directiveWonRef.current &&
       !isFreeplay &&
@@ -1281,35 +1457,47 @@ export function useTrafficSimulation() {
           const spawnOff = closed?.some((id) => id.startsWith(prefix)) ?? false;
           return spawnOff || byDir[d] >= minReq;
         });
-      if (cleared >= wc.clearCars && minOk) {
-        directiveWonRef.current = true;
-        isPlayingRef.current = false;
-        setIsPlaying(false);
-        const phaseCount = compiledPhases.length > 0 ? compiledPhases.length : 4;
-        let phaseSum = 0;
-        for (let i = 0; i < phaseCount; i++) {
-          phaseSum += phaseTimings[i] ?? DEFAULT_PHASE_GREEN_SECONDS;
+      const winReady = cleared >= wc.clearCars && minOk;
+      if (winReady) {
+        winSettleRef.current += 1;
+        if (winSettleRef.current >= 4) {
+          winSettleRef.current = 0;
+          directiveWonRef.current = true;
+          isPlayingRef.current = false;
+          setIsPlaying(false);
+          const phaseCount = compiledPhases.length > 0 ? compiledPhases.length : 4;
+          let phaseSum = 0;
+          for (let i = 0; i < phaseCount; i++) {
+            phaseSum += phaseTimings[i] ?? DEFAULT_PHASE_GREEN_SECONDS;
+          }
+          const linesOfCode = programCode.split('\n').filter((l) => l.trim() !== '').length;
+          const hwJoined = (currentLevel.hardware ?? []).join('');
+          const hardwareCost = Math.min(2000, Math.max(100, hwJoined.length * 8 + phaseCount * 110));
+          const wallSecs = Math.max(1, sessionTimeRef.current);
+          saveHighscore(activeLevelId, {
+            secondsToClear: wallSecs,
+            instructionCount: linesOfCode,
+            hardwareCost,
+          });
+          try {
+            sessionStorage.removeItem(docketFatalStorageKey(activeLevelId));
+          } catch {
+            /* ignore */
+          }
+          saveSolution(activeLevelId, programCode);
+          if (currentLevel.nextLevelId) {
+            unlockLevel(currentLevel.nextLevelId);
+          }
+          setLevelCompleteInfo({
+            carsCleared: cleared,
+            timeSeconds: wallSecs,
+            cycleTime: phaseSum,
+            linesOfCode,
+            hardwareCost,
+          });
         }
-        const linesOfCode = programCode.split('\n').filter((l) => l.trim() !== '').length;
-        const hwJoined = (currentLevel.hardware ?? []).join('');
-        const hardwareCost = Math.min(2000, Math.max(100, hwJoined.length * 8 + phaseCount * 110));
-        const wallSecs = Math.max(1, sessionTimeRef.current);
-        saveHighscore(activeLevelId, {
-          secondsToClear: wallSecs,
-          instructionCount: linesOfCode,
-          hardwareCost,
-        });
-        saveSolution(activeLevelId, programCode);
-        if (currentLevel.nextLevelId) {
-          unlockLevel(currentLevel.nextLevelId);
-        }
-        setLevelCompleteInfo({
-          carsCleared: cleared,
-          timeSeconds: wallSecs,
-          cycleTime: phaseSum,
-          linesOfCode,
-          hardwareCost,
-        });
+      } else {
+        winSettleRef.current = 0;
       }
     }
     u.cullSkid = performance.now() - m;
@@ -1555,6 +1743,25 @@ export function useTrafficSimulation() {
     d.paths = performance.now() - md;
     md = performance.now();
 
+    if (!isPlaying || crashInfo) {
+      ctx.save();
+      const pad = 6;
+      const hw = INTERSECTION_SIZE / 2 + pad;
+      ctx.strokeStyle = crashInfo ? 'rgba(248,81,73,0.5)' : 'rgba(88,166,255,0.38)';
+      ctx.lineWidth = crashInfo ? 2.5 : 2;
+      ctx.setLineDash([6, 5]);
+      ctx.strokeRect(centerX - hw, centerY - hw, hw * 2, hw * 2);
+      ctx.setLineDash([]);
+      if (bgFontsReady) {
+        ctx.font = '10px "JetBrains Mono", monospace';
+        ctx.fillStyle = crashInfo ? 'rgba(248,81,73,0.92)' : 'rgba(88,166,255,0.88)';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('CONFLICT_PLANE — LOGIC PROBE', centerX - hw, centerY - hw - 6);
+      }
+      ctx.restore();
+    }
+
     if (showHeatmap) {
       const cellWidth = CANVAS_SIZE / HEAT_GRID_COLS;
       const cellHeight = CANVAS_SIZE / HEAT_GRID_ROWS;
@@ -1570,6 +1777,15 @@ export function useTrafficSimulation() {
           ctx.fillStyle = `rgba(${red}, ${green}, 0, ${alpha})`;
           ctx.fillRect(x * cellWidth, y * cellHeight, cellWidth, cellHeight);
         }
+      }
+      if (bgFontsReady) {
+        ctx.save();
+        ctx.font = '10px "JetBrains Mono", monospace';
+        ctx.fillStyle = 'rgba(210,153,34,0.92)';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('THERMAL SIGNATURE (CAB COOLING FEEDBACK)', 10, CANVAS_SIZE - 10);
+        ctx.restore();
       }
     }
     d.heatmap = performance.now() - md;
@@ -1676,7 +1892,16 @@ export function useTrafficSimulation() {
     d.queueLabels = performance.now() - md;
     md = performance.now();
 
-    vehiclesRef.current.forEach(v => {
+    const incidentDrawActive =
+      Boolean(
+        incidentTape &&
+          crashInfo &&
+          incidentPlaybackIndex >= 0 &&
+          incidentPlaybackIndex < incidentTape.length,
+      );
+    const vehiclesDraw = incidentDrawActive ? incidentTape![incidentPlaybackIndex].vehicles : vehiclesRef.current;
+
+    vehiclesDraw.forEach((v) => {
       ctx.save();
       ctx.translate(v.x, v.y);
       ctx.rotate(v.angle);
@@ -1684,7 +1909,7 @@ export function useTrafficSimulation() {
 
       const lane = LANE_MAP.get(v.laneId);
       const isStopped = Math.abs(v.vx) < 0.1 && Math.abs(v.vy) < 0.1;
-      const brakeIntensity = v.brakeIntensity || 0;
+      const brakeIntensity = 'brakeIntensity' in v ? v.brakeIntensity || 0 : 0;
       const isBraking = isStopped || brakeIntensity > 0;
 
       ctx.shadowColor = 'transparent';
@@ -1694,7 +1919,7 @@ export function useTrafficSimulation() {
 
       renderVehicleSprite({
         ctx,
-        v,
+        v: v as Vehicle,
         lane,
         time,
         isStopped,
@@ -1720,6 +1945,61 @@ export function useTrafficSimulation() {
     });
     d.vehicles = performance.now() - md;
     md = performance.now();
+
+    const atIncidentEnd =
+      !incidentTape || incidentPlaybackIndex >= incidentTape.length - 1;
+    if (
+      crashInfo &&
+      (!crashInfo.type || crashInfo.type === 'COLLISION') &&
+      crashInfo.conflictRays &&
+      crashInfo.conflictRays.length > 0 &&
+      atIncidentEnd
+    ) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(248, 81, 73, 0.55)';
+      ctx.lineWidth = 1.25;
+      ctx.setLineDash([5, 7]);
+      for (const r of crashInfo.conflictRays) {
+        ctx.beginPath();
+        ctx.moveTo(r.x0, r.y0);
+        ctx.lineTo(r.x1, r.y1);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(248, 81, 73, 0.85)';
+      ctx.beginPath();
+      ctx.arc(crashInfo.x, crashInfo.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (
+      incidentDrawActive &&
+      atIncidentEnd &&
+      crashInfo &&
+      crashInfo.type === 'COLLISION' &&
+      crashInfo.vehicleIds[0] !== '—'
+    ) {
+      const va = vehiclesDraw.find((x) => x.id === crashInfo.vehicleIds[0]);
+      const vb = vehiclesDraw.find((x) => x.id === crashInfo.vehicleIds[1]);
+      if (va && vb) {
+        const dx = vb.x - va.x;
+        const dy = vb.y - va.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const rvx = vb.vx - va.vx;
+        const rvy = vb.vy - va.vy;
+        const closure = (rvx * dx + rvy * dy) / dist;
+        const gap = Math.max(0, dist - (va.length + vb.length) * 0.28);
+        ctx.save();
+        ctx.font = '9px "JetBrains Mono", monospace';
+        ctx.fillStyle = 'rgba(200, 210, 220, 0.95)';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`LPH_GAP ${gap.toFixed(0)} px`, va.x + 14, va.y - 12);
+        ctx.fillText(`CL_RATE ${closure.toFixed(2)}`, vb.x + 14, vb.y - 12);
+        ctx.restore();
+      }
+    }
 
     const inspected = inspectPaintRef.current;
     if (inspected) {
@@ -1806,7 +2086,20 @@ export function useTrafficSimulation() {
     }
     d.chrome = performance.now() - md;
 
-  }, [activeMovements, lightState, offScreenQueues, bgFontsReady, showHeatmap, yieldMovements, crashInfo, activeLevelId, currentLevel]);
+  }, [
+    activeMovements,
+    lightState,
+    offScreenQueues,
+    bgFontsReady,
+    showHeatmap,
+    yieldMovements,
+    crashInfo,
+    activeLevelId,
+    currentLevel,
+    isPlaying,
+    incidentTape,
+    incidentPlaybackIndex,
+  ]);
 
   const updateRef = useRef(update);
   updateRef.current = update;
@@ -1825,7 +2118,8 @@ export function useTrafficSimulation() {
       let remaining = simStep;
       while (remaining > 1e-8) {
         const sub = Math.min(MAX_SIM_INTEGRATION_STEP, remaining);
-        updateRef.current(time, sub);
+        const integrationFrameLead = remaining === simStep;
+        updateRef.current(time, sub, integrationFrameLead);
         remaining -= sub;
       }
       updateMs = performance.now() - u0;
@@ -1882,6 +2176,10 @@ export function useTrafficSimulation() {
   }, [loop]);
 
   useEffect(() => {
+    triggerRedraw();
+  }, [incidentPlaybackIndex, incidentTape, triggerRedraw]);
+
+  useEffect(() => {
     if (introPhase !== null) return;
     triggerRedraw();
     return () => {
@@ -1918,11 +2216,16 @@ export function useTrafficSimulation() {
   const togglePlayback = useCallback(() => {
     setIsPlaying((playing) => {
       const next = !playing;
+      if (next && hardwareBudget.procurementBlocked) {
+        addToast('BEYOND_AUTHORIZED_PROCUREMENT — execute interlock latched.', 'info');
+        isPlayingRef.current = false;
+        return false;
+      }
       isPlayingRef.current = next;
       if (next) triggerRedraw();
       return next;
     });
-  }, [triggerRedraw]);
+  }, [triggerRedraw, hardwareBudget.procurementBlocked, addToast]);
 
   useEffect(() => {
     triggerRedraw();
@@ -2137,6 +2440,7 @@ export function useTrafficSimulation() {
     sessionCarsByDirRef.current = { N: 0, S: 0, E: 0, W: 0 };
     sessionTimeRef.current = 0;
     directiveWonRef.current = false;
+    winSettleRef.current = 0;
     setSessionCarsCleared(0);
     setSessionCarsByDir({ N: 0, S: 0, E: 0, W: 0 });
     setSessionCrashes(0);
@@ -2151,6 +2455,10 @@ export function useTrafficSimulation() {
     previousRearTiresRef.current = {};
     crashDetectedRef.current = false;
     setCrashInfo(null);
+    setIncidentTape(null);
+    setIncidentPlaybackIndex(0);
+    incidentBufferRef.current = [];
+    lastIncidentSampleTimeRef.current = 0;
     setLevelCompleteInfo(null);
     setIsFreeplay(false);
     setIsCrashModalMinimized(false);
@@ -2183,6 +2491,9 @@ export function useTrafficSimulation() {
     previousRearTiresRef.current = {};
     crashDetectedRef.current = false;
     setCrashInfo(null);
+    setIncidentTape(null);
+    setIncidentPlaybackIndex(0);
+    incidentBufferRef.current = [];
     setIsCrashModalMinimized(false);
     setOffScreenQueues({});
     inspectPaintRef.current = null;
@@ -2212,9 +2523,19 @@ export function useTrafficSimulation() {
     zoom, setZoom, pan, setPan, isDraggingCanvasRef, dragStartCanvasRef, panStartRef, hasDraggedRef,
     activePointersRef, pinchStartDistRef, pinchStartZoomRef, timeScale, setTimeScale, timeScaleRef,
     showHeatmap, setShowHeatmap, loopLastMs, setLoopLastMs, loopAvg10Ms, setLoopAvg10Ms, crashInfo, setCrashInfo,
+    incidentTape, incidentPlaybackIndex, setIncidentPlaybackIndex,
+    hardwareBudget,
     isCrashModalMinimized, setIsCrashModalMinimized, levelCompleteInfo, setLevelCompleteInfo,
     isOptimizing, setIsOptimizing, toasts, addToast,
-    isManualOpen, setIsManualOpen, installDeferred, setInstallDeferred, isStandaloneDisplay, setIsStandaloneDisplay,
+    isManualOpen,
+    setIsManualOpen,
+    manualInitialTab,
+    openManual,
+    clearManualInitialTab,
+    installDeferred,
+    setInstallDeferred,
+    isStandaloneDisplay,
+    setIsStandaloneDisplay,
     cycleDemandRef, skipConditionalAfterInjectRef, cycleCounterRef,
     programCode, setProgramCode, compiledPhases, setCompiledPhases, compiledRules, setCompiledRules,
     injectedPhase, setInjectedPhase, programError, setProgramError, isEditMode, setIsEditMode,
