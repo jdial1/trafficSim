@@ -7,7 +7,7 @@
     "body": "Only North and South are open; East and West are strapped out for this burn. SEC-082 audit staff want a clean hourly discharge proof on the live axis only.",
     "bullets": [
       "[GOAL] Clear 60 vehicles; at least 15 per direction on N/S.",
-      "[RESTRICTION] E/W closed. Max 2 phases; no conditionals.",
+      "[RESTRICTION] E/W closed. Max 2 phases",
       "[HAZARD] Gridlock on any approach halts the docket."
     ],
     "hardware": ["SEC-082 BASE LOGIC"],
@@ -42,7 +42,7 @@
     "body": "North and South are locked for diagnostic burn-in; traffic is only entering from East and West. Clear the spike without cooking the relay shelf past the thermal duty envelope.",
     "bullets": [
       "[GOAL] Clear 75 vehicles; at least 20 per direction on E/W.",
-      "[RESTRICTION] N/S closed. Max 2 phases; no conditionals.",
+      "[RESTRICTION] N/S closed. Max 2 phases",
       "[HAZARD] Saturated buffers (queues backing up hard) trigger gridlock halt."
     ],
     "hardware": [
@@ -82,8 +82,8 @@
     "body": "Every approach is live and registers are deep. Run four banks that cover the full compass while staying inside the sync envelope Finance signed.",
     "bullets": [
       "[GOAL] Clear 85 vehicles; at least 22 per direction.",
-      "[RESTRICTION] Max 4 phases; no conditionals. Hardware cost ceiling 1900.",
-      "[HAZARD] Gridlock or incompatible greens in one slice fail the run."
+      "[RESTRICTION] Max 4 phases; Hardware cost ceiling 1900.",
+      "[HAZARD] Gridlock or incompatible greens in one phase fail the run."
     ],
     "hardware": [
       "SEC-082 MULTIPLEX CONTROLLER",
@@ -108,11 +108,11 @@
     "title": "Protected Lefts",
     "from": "OGAS SAFETY DIVISION <safety@bot.gov>",
     "subject": "82-D: Left vs Through",
-    "body": "Northbound and southbound left turns cannot share a slice with opposing through traffic. Give N_LEFT and S_LEFT their own protected banks.",
+    "body": "Northbound and southbound left turns cannot share a phase with opposing through traffic. Give N_LEFT and S_LEFT their own protected banks.",
     "bullets": [
       "[GOAL] Clear 70 vehicles; at least 12 per direction on N/S.",
-      "[RESTRICTION] E/W closed. Max 4 phases; no conditionals.",
-      "[HAZARD] Turn-through overlap in the same slice voids the run (conflict fault)."
+      "[RESTRICTION] E/W closed. Max 4 phases",
+      "[HAZARD] Turn-through overlap in the same phase voids the run (conflict fault)."
     ],
     "hardware": ["SEC-082 PHASE SEQUENCER"],
     "initialCode": "phase(1):\n    NORTH_STRAIGHT.GO\n    SOUTH_STRAIGHT.GO\n\nphase(2):\n    # Add Left Turn Logic here",
@@ -131,7 +131,7 @@
     "randomSeed": 1001,
     "bureauMemo": "OGAS counsel still bills by the footnote. Discovery on the last carve-out ran three fiscal years; try not to star in the sequel.",
     "quickRef": {
-      "body": "N/S left turns can't share a slice with oncoming straight. Give lefts their own protected phase.",
+      "body": "N/S left turns can't share a phase with E/W straight. Give lefts their own protected phase.",
       "attribution": "Dave"
     }
   },
@@ -143,7 +143,7 @@
     "body": "Spawn ROM is skewed: northbound demand dominates the morning peak. Meet quota on the heavy mast without starving southbound below audit minimums.",
     "bullets": [
       "[GOAL] Clear 90 vehicles; at least 15 per direction on every open approach.",
-      "[RESTRICTION] Max 4 phases; no conditionals.",
+      "[RESTRICTION] Max 4 phases",
       "[RULE] Demand weighting favors North — bias green toward N without dropping S under minimum."
     ],
     "hardware": ["SEC-082 TRAFFIC ANALYZER"],
@@ -167,7 +167,7 @@
     "body": "East and West through lanes are dead on the schematic; only left and right movements are wired. Route discharge through turns and side spill paths.",
     "bullets": [
       "[GOAL] Clear 72 vehicles.",
-      "[RESTRICTION] E/W through lanes closed; left and right only on E/W. Max 4 phases; no conditionals.",
+      "[RESTRICTION] E/W through lanes closed; left and right only on E/W. Max 4 phases",
       "[HAZARD] Turn-heavy flow raises gridlock risk — watch queue depth."
     ],
     "hardware": ["SEC-082 RE-ROUTING MODULE"],
@@ -188,12 +188,12 @@
     "id": "2C",
     "title": "Walk Mandate",
     "from": "CITIZEN SAFETY COUNCIL <council@bot.gov>",
-    "subject": "83-C: Crosswalk Slice",
-    "body": "School dismissal forces an all-red pedestrian slice before traffic can roll again. You still owe full discharge once vehicles resume.",
+    "subject": "83-C: Crosswalk Phase",
+    "body": "School dismissal forces an all-red pedestrian phase before traffic can roll again. You still owe full discharge once vehicles resume.",
     "bullets": [
       "[GOAL] Clear 80 vehicles; at least 22 per direction.",
-      "[RULE] Include EXCLUSIVE_PEDESTRIAN_PHASE.GO in the phase list. Max 6 phases; no conditionals.",
-      "[RESTRICTION] Long walk slices inflate flow-audit dwell — keep override windows tight."
+      "[RULE] Include EXCLUSIVE_PEDESTRIAN_PHASE.GO in the phase list. Max 6 phases",
+      "[RESTRICTION] Long walk phases inflate flow-audit dwell — keep override windows tight."
     ],
     "hardware": ["SEC-082 CROSSWALK CONTROLLER"],
     "initialCode": "phase(1):\n    EXCLUSIVE_PEDESTRIAN_PHASE.GO",
@@ -204,7 +204,7 @@
     "randomSeed": 2003,
     "bureauMemo": "School Board staff time the override clock. A fat vehicular green during walk posts straight to their docket — keep the paper slice short.",
     "quickRef": {
-      "body": "You need an all-red walk slice in the phase list—EXCLUSIVE_PEDESTRIAN_PHASE—before cars roll again.",
+      "body": "You need an all-red walk phase in the phase list—EXCLUSIVE_PEDESTRIAN_PHASE—before cars roll again.",
       "attribution": "Dave"
     }
   },
@@ -216,8 +216,8 @@
     "body": "Where geometry allows, use .YIELD on turns so gap logic shares green instead of burning extra banks. Efficiency audit is watching cycle time.",
     "bullets": [
       "[GOAL] Clear 95 vehicles.",
-      "[RULE] At least two movements must use .YIELD. Max 4 phases; no conditionals.",
-      "[RESTRICTION] Stay inside thermal duty; do not buy relief with unlimited slices."
+      "[RULE] At least two movements must use .YIELD. Max 4 phases",
+      "[RESTRICTION] Stay inside thermal duty; do not buy relief with unlimited phases."
     ],
     "hardware": ["SEC-082 LOGIC GATE v2"],
     "initialCode": "phase(1):\n    NORTH_STRAIGHT.GO\n    SOUTH_STRAIGHT.GO\n    NORTH_RIGHT.YIELD",
@@ -262,11 +262,11 @@
     "title": "Split E/W Mast",
     "from": "OGAS SAFETY DIVISION <safety@bot.gov>",
     "subject": "84-C: Heavy West",
-    "body": "Westbound truck envelopes need their own slice; do not hard-green opposing E/W movements in the same macro-slice. Split the mast banks.",
+    "body": "Westbound truck envelopes need their own phase; do not hard-green opposing E/W movements in the same macro-phase. Split the mast banks.",
     "bullets": [
       "[GOAL] Clear 82 vehicles; at least 22 per direction.",
       "[RESTRICTION] Max 6 phases; conditionals allowed. Sequence W_LEFT/W_STRAIGHT/W_RIGHT separate from the east mast.",
-      "[HAZARD] Opposing E/W hard .GO in one slice risks kinetic overlap fault."
+      "[HAZARD] Opposing E/W hard .GO in one phase risks kinetic overlap fault."
     ],
     "hardware": ["SEC-082 HEAVY DUTY RELAYS"],
     "initialCode": "",
@@ -275,7 +275,7 @@
     "constraints": { "maxPhases": 6, "noConditionals": false },
     "nextLevelId": "4A",
     "randomSeed": 3003,
-    "bureauMemo": "Safety wants split-bank screenshots where west heavy never shares a slice with east green. Auditors treat silence on the annunciator as a personality trait."
+    "bureauMemo": "Safety wants split-bank screenshots where west heavy never shares a phase with east green. Auditors treat silence on the annunciator as a personality trait."
   },
   {
     "id": "4A",
@@ -307,7 +307,7 @@
     "bullets": [
       "[GOAL] Clear 95 vehicles.",
       "[RESTRICTION] Max 4 phases; conditionals allowed.",
-      "[HAZARD] More than 5 vehicles waiting on SOUTH_STRAIGHT triggers buffer halt (queue guard)."
+      "[HAZARD] More than 5 vehicles waiting on SOUTH_STRAIGHT triggers GRIDLOCK_DETECTED."
     ],
     "hardware": ["SEC-082 PRIORITY OVERRIDE"],
     "initialCode": "",

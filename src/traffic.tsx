@@ -7,7 +7,7 @@ import { LANE_MAP } from './constants';
 
 export const VIEWPORT_MOBILE_MAX_WIDTH = 767;
 export const narrowViewport = () => typeof window !== 'undefined' && window.matchMedia(`(max-width: ${VIEWPORT_MOBILE_MAX_WIDTH}px)`).matches;
-export const defaultZoom = () => narrowViewport() ? 1.2 : 1;
+export const defaultZoom = () => (narrowViewport() ? 1.2 : 1) * 1.2;
 
 export const MovementLabels: Record<number, string> = {
   [Movement.NORTHBOUND_LEFT]: 'NORTH_LEFT', [Movement.NORTHBOUND_STRAIGHT]: 'NORTH_STRAIGHT', [Movement.NORTHBOUND_RIGHT]: 'NORTH_RIGHT',

@@ -13,6 +13,7 @@ import {
   CrashModal,
   ProgramCompileError,
   IndustrialPanelKey,
+  industrialKeyClass,
 } from './UI';
 import { manualHelpTabForCompilerMessage } from './manualAppendix';
 import { AnalyticalChart, QueueChart } from './Charts';
@@ -92,7 +93,38 @@ export default function App() {
     logicDeployEpochRef.current += 1;
     setLogicValidating(false);
     setLogicImageValidated(false);
+    if (burnTimerRef.current != null) {
+      window.clearInterval(burnTimerRef.current);
+      burnTimerRef.current = null;
+    }
+    setEepromBurn(null);
   }, [programCode, activeLevelId]);
+
+  const runEepromBurnSequence = useCallback((onComplete: () => void) => {
+    const lines = [
+      'WRITING SECTOR 0xAF…',
+      'VERIFYING CHECKSUM…',
+      'LATCHING RELAYS…',
+      'ARMING OGAS HANDSHAKE…',
+    ];
+    let step = 0;
+    if (burnTimerRef.current != null) window.clearInterval(burnTimerRef.current);
+    setEepromBurn({ progress: 0, line: lines[0] });
+    burnTimerRef.current = window.setInterval(() => {
+      step += 1;
+      const progress = Math.min(1, step / 26);
+      setEepromBurn({
+        progress,
+        line: lines[Math.min(lines.length - 1, Math.floor(progress * lines.length))],
+      });
+      if (progress >= 1 && burnTimerRef.current != null) {
+        window.clearInterval(burnTimerRef.current);
+        burnTimerRef.current = null;
+        setEepromBurn(null);
+        onComplete();
+      }
+    }, 65);
+  }, []);
 
   const startLogicValidation = useCallback(() => {
     if (hardwareBudget.procurementBlocked && !currentLevel?.isSandbox) {
@@ -152,36 +184,16 @@ export default function App() {
       hapticError();
       return;
     }
-    const lines = [
-      'WRITING SECTOR 0xAF…',
-      'VERIFYING CHECKSUM…',
-      'LATCHING RELAYS…',
-      'ARMING OGAS HANDSHAKE…',
-    ];
-    let step = 0;
-    if (burnTimerRef.current != null) window.clearInterval(burnTimerRef.current);
-    setEepromBurn({ progress: 0, line: lines[0] });
-    burnTimerRef.current = window.setInterval(() => {
-      step += 1;
-      const progress = Math.min(1, step / 26);
-      setEepromBurn({
-        progress,
-        line: lines[Math.min(lines.length - 1, Math.floor(progress * lines.length))],
-      });
-      if (progress >= 1 && burnTimerRef.current != null) {
-        window.clearInterval(burnTimerRef.current);
-        burnTimerRef.current = null;
-        setEepromBurn(null);
-        addLog('LOGIC_IMAGE_BURNED', 'var(--green)');
-        resetDirectiveRunProgress();
-        setZoom(0.8);
-        isPlayingRef.current = true;
-        setIsPlaying(true);
-        setMobileScreen('metrics');
-        setMobileSplitHeight(mobileMinSplitPct);
-        setLogicImageValidated(false);
-      }
-    }, 65);
+    runEepromBurnSequence(() => {
+      addLog('LOGIC_IMAGE_BURNED', 'var(--green)');
+      resetDirectiveRunProgress();
+      setZoom(0.8);
+      isPlayingRef.current = true;
+      setIsPlaying(true);
+      setMobileScreen('metrics');
+      setMobileSplitHeight(mobileMinSplitPct);
+      setLogicImageValidated(false);
+    });
   }, [
     hardwareBudget.procurementBlocked,
     currentLevel?.isSandbox,
@@ -195,6 +207,7 @@ export default function App() {
     setMobileSplitHeight,
     mobileMinSplitPct,
     addToast,
+    runEepromBurnSequence,
   ]);
 
   const startDesktopBurnRun = useCallback(() => {
@@ -202,13 +215,16 @@ export default function App() {
       addToast('BEYOND_AUTHORIZED_PROCUREMENT — EEPROM interlock.', 'info');
       return;
     }
+    hapticHeavy();
     if (!compile()) {
       hapticError();
       return;
     }
-    addLog('LOGIC_IMAGE_BURNED', 'var(--green)');
-    setIsEditMode(false);
-    setLogicImageValidated(false);
+    runEepromBurnSequence(() => {
+      addLog('LOGIC_IMAGE_BURNED', 'var(--green)');
+      setIsEditMode(false);
+      setLogicImageValidated(false);
+    });
   }, [
     hardwareBudget.procurementBlocked,
     currentLevel?.isSandbox,
@@ -216,6 +232,7 @@ export default function App() {
     addLog,
     setIsEditMode,
     addToast,
+    runEepromBurnSequence,
   ]);
 
   useEffect(() => {
@@ -378,6 +395,17 @@ export default function App() {
                   </button>
                 ))}
               </div>
+              <button
+                type="button"
+                title="Reset zoom to 1×"
+                onClick={() => {
+                  hapticTap();
+                  setZoom(1);
+                }}
+                className="shrink-0 cursor-pointer rounded-none border border-[#2D333B] bg-[#1A1D23] px-2 py-1 font-mono text-[10px] font-bold tabular-nums text-[#8B949E] shadow-xl transition-all hover:border-[#3FB950]/50 hover:text-[#C9D1D9] pointer-events-auto"
+              >
+                {zoom.toFixed(2)}×
+              </button>
             </div>
             <canvas 
               ref={canvasRef} 
@@ -490,39 +518,44 @@ export default function App() {
                         {procurementLocked && (
                           <div className="pointer-events-none absolute -inset-1 z-10 rounded border-2 border-[#F85149]/70 bg-[#F85149]/10 shadow-[0_0_20px_rgba(248,81,73,0.2)]" />
                         )}
-                        {logicValidating && (
-                          <div className="relative z-[1] mb-2 flex items-center justify-center gap-2 rounded border border-[#D29922]/50 bg-black/60 py-3 font-mono text-[10px] font-bold uppercase tracking-[0.15em] text-[#D29922]">
-                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                            <span>Validating logic image…</span>
+                        {logicValidating ? (
+                          <div className="relative z-[1] m-0 flex w-full flex-col justify-center gap-2 border-y-2 border-[#D29922] bg-[#D29922]/10 py-3 font-mono shadow-[inset_0_0_20px_rgba(210,153,34,0.12)]">
+                            <div className="flex items-center justify-center gap-2 px-2 text-[10px] font-bold uppercase tracking-[0.15em] text-[#D29922]">
+                              <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                              <span>Validating logic image…</span>
+                            </div>
+                            <div className="mx-2 h-2 overflow-hidden rounded-sm bg-[#21262d]">
+                              <div className="h-full w-full animate-pulse bg-[#D29922]/70" />
+                            </div>
                           </div>
+                        ) : eepromBurn ? (
+                          <div className="relative z-[1] m-0 flex w-full flex-col justify-center gap-2 border-y-2 border-[#58A6FF] bg-[#58A6FF]/10 py-3 font-mono shadow-[inset_0_0_20px_rgba(88,166,255,0.12)]">
+                            <div className="px-2 text-center text-[10px] font-bold uppercase tracking-[0.15em] text-[#58A6FF]">{eepromBurn.line}</div>
+                            <div className="mx-2 h-2 overflow-hidden rounded-sm bg-[#21262d]">
+                              <div
+                                className="h-full bg-[#58A6FF] transition-[width] duration-75"
+                                style={{ width: `${Math.round(eepromBurn.progress * 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={procurementLocked}
+                            onClick={() => {
+                              if (logicImageValidated) startMobileBurnRun();
+                              else startLogicValidation();
+                            }}
+                            className={
+                              logicImageValidated
+                                ? 'relative z-[1] m-0 w-full text-[14px] bg-[#58A6FF]/10 py-3 font-bold uppercase tracking-[0.2em] shadow-[inset_0_0_20px_rgba(88,166,255,0.12)] transition-colors disabled:cursor-not-allowed disabled:opacity-40 border-y-2 border-[#58A6FF] text-[#58A6FF] hover:bg-[#58A6FF]/20'
+                                : 'relative z-[1] m-0 w-full text-[14px] bg-[#3FB950]/10 py-3 font-bold uppercase tracking-[0.2em] shadow-[inset_0_0_20px_rgba(63,185,80,0.1)] transition-colors disabled:cursor-not-allowed disabled:opacity-40 border-y-2 border-[#3FB950] text-[#3FB950] hover:bg-[#3FB950]/20'
+                            }
+                          >
+                            {logicImageValidated ? '[ RUN ]' : '[ VALIDATION ]'}
+                          </button>
                         )}
-                        <button
-                          type="button"
-                          disabled={!!eepromBurn || procurementLocked || logicValidating}
-                          onClick={() => {
-                            if (logicImageValidated) startMobileBurnRun();
-                            else startLogicValidation();
-                          }}
-                          className={
-                            logicImageValidated
-                              ? 'relative z-[1] m-0 w-full text-[14px] bg-[#58A6FF]/10 py-3 font-bold uppercase tracking-[0.2em] shadow-[inset_0_0_20px_rgba(88,166,255,0.12)] transition-colors disabled:cursor-not-allowed disabled:opacity-40 border-y-2 border-[#58A6FF] text-[#58A6FF] hover:bg-[#58A6FF]/20'
-                              : 'relative z-[1] m-0 w-full text-[14px] bg-[#3FB950]/10 py-3 font-bold uppercase tracking-[0.2em] shadow-[inset_0_0_20px_rgba(63,185,80,0.1)] transition-colors disabled:cursor-not-allowed disabled:opacity-40 border-y-2 border-[#3FB950] text-[#3FB950] hover:bg-[#3FB950]/20'
-                          }
-                        >
-                          {logicImageValidated ? '[ RUN ]' : '[ VALIDATION ]'}
-                        </button>
                       </div>
-                      {eepromBurn && (
-                        <div className="rounded border border-[#58A6FF]/40 bg-black/60 px-2 py-2 font-mono text-[9px] text-[#8B949E]">
-                          <div className="mb-1 text-[#58A6FF]">{eepromBurn.line}</div>
-                          <div className="h-2 w-full overflow-hidden rounded-sm bg-[#21262d]">
-                            <div
-                              className="h-full bg-[#58A6FF] transition-[width] duration-75"
-                              style={{ width: `${Math.round(eepromBurn.progress * 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -904,15 +937,33 @@ export default function App() {
             />
             {isEditMode && (
               <div className="flex flex-col gap-2">
-                {logicValidating && (
-                  <div className="flex items-center justify-center gap-2 rounded border border-[#D29922]/50 bg-black/60 px-2 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wide text-[#D29922]">
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                    <span>Validating logic image…</span>
+                {logicValidating ? (
+                  <div
+                    className={`${industrialKeyClass} flex w-full flex-col gap-2 border-[#D29922]/50 bg-black/60 px-2 py-2 text-[10px] font-bold uppercase tracking-wide text-[#D29922]`}
+                  >
+                    <div className="flex items-center justify-center gap-2">
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                      <span>Validating logic image…</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-sm bg-[#21262d]">
+                      <div className="h-full w-full animate-pulse bg-[#D29922]/70" />
+                    </div>
                   </div>
-                )}
-                {!logicImageValidated ? (
+                ) : eepromBurn ? (
+                  <div
+                    className={`${industrialKeyClass} flex w-full flex-col gap-2 border-[#58A6FF]/50 bg-black/60 px-2 py-2 text-[9px] text-[#8B949E]`}
+                  >
+                    <div className="text-center font-mono font-bold uppercase tracking-wide text-[#58A6FF]">{eepromBurn.line}</div>
+                    <div className="h-2 w-full overflow-hidden rounded-sm bg-[#21262d]">
+                      <div
+                        className="h-full bg-[#58A6FF] transition-[width] duration-75"
+                        style={{ width: `${Math.round(eepromBurn.progress * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : !logicImageValidated ? (
                   <IndustrialPanelKey
-                    disabled={procurementLocked || logicValidating}
+                    disabled={procurementLocked}
                     onClick={startLogicValidation}
                     className="w-full py-2 text-[11px] text-[#3FB950] border-[#3FB950]/50 bg-[#3FB950]/12 hover:bg-[#3FB950]/24"
                   >
@@ -920,7 +971,7 @@ export default function App() {
                   </IndustrialPanelKey>
                 ) : (
                   <IndustrialPanelKey
-                    disabled={procurementLocked || logicValidating}
+                    disabled={procurementLocked}
                     onClick={startDesktopBurnRun}
                     className="w-full py-2 text-[11px] text-[#58A6FF] border-[#58A6FF]/50 bg-[#58A6FF]/12 hover:bg-[#58A6FF]/24"
                   >
@@ -1072,8 +1123,8 @@ export default function App() {
             <div className="mx-auto h-full w-[2px] bg-[#3FB950]/35 transition-colors group-hover:bg-[#3FB950]/80 group-active:bg-[#3FB950]" />
           </div>
         )}
-        <div className="absolute top-6 right-6 z-20 flex flex-row items-start gap-2">
-          <div className="flex flex-col gap-2">
+        <div className="pointer-events-none absolute top-6 right-6 z-20 flex flex-row items-start gap-2">
+          <div className="flex flex-col gap-2 pointer-events-auto">
             <MasterSwitch isOn={isPlaying} onToggle={togglePlayback} procurementLock={procurementLocked} />
             {TIME_SCALE_OPTIONS.map((s) => (
               <button
@@ -1094,6 +1145,17 @@ export default function App() {
               </button>
             ))}
           </div>
+          <button
+            type="button"
+            title="Reset zoom to 1×"
+            onClick={() => {
+              hapticTap();
+              setZoom(1);
+            }}
+            className="shrink-0 cursor-pointer rounded border border-[#2D333B] bg-[#1A1D23] px-2 py-1.5 font-mono text-[11px] font-bold tabular-nums text-[#8B949E] shadow-xl transition-all hover:border-[#3FB950]/50 hover:text-[#C9D1D9] pointer-events-auto"
+          >
+            {zoom.toFixed(2)}×
+          </button>
         </div>
         <div className="flex items-center justify-center w-full h-full overflow-hidden">
           <canvas 

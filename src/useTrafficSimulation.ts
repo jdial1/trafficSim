@@ -270,8 +270,8 @@ export function useTrafficSimulation() {
   const activePointersRef = useRef<Map<number, {x: number, y: number}>>(new Map());
   const pinchStartDistRef = useRef(0);
   const pinchStartZoomRef = useRef(0);
-  const [timeScale, setTimeScale] = useState<TimeScale>(1);
-  const timeScaleRef = useRef<TimeScale>(1);
+  const [timeScale, setTimeScale] = useState<TimeScale>(10);
+  const timeScaleRef = useRef<TimeScale>(10);
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [loopLastMs, setLoopLastMs] = useState(0);
   const [loopAvg10Ms, setLoopAvg10Ms] = useState(0);
