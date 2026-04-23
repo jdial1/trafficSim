@@ -6,38 +6,48 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Save, Plus, Minus, Trash2, Download, Mail, Terminal, Map as MapIcon } from 'lucide-react';
-import { Movement, Vehicle, Lane, LightState, MovementTiming, VehicleType, LogEntry, HistoryEntry, QueueHistoryEntry, BriefingContent, level1Briefing, IncidentFrame, IncidentVehicleSnap } from './types';
-import { parseTrafficProgram, Phase, ConditionalRule, PhaseCommand, KEYWORD_MAP } from './interpreter';
+import { Movement, Vehicle, Lane, LightState, MovementTiming, VehicleType, LogEntry, HistoryEntry, QueueHistoryEntry, BriefingContent, level1Briefing } from './types';
+import { parseTrafficProgram, validateTrafficProgramForBurn, Phase, ConditionalRule, PhaseCommand, KEYWORD_MAP } from './interpreter';
 import { PRNG } from './utils/prng';
 import { LevelManager } from './LevelManager';
 import { CANVAS_SIZE, INTERSECTION_SIZE, LANE_WIDTH, LANES, DEFAULT_TIMINGS, DEFAULT_PHASE_GREEN_SECONDS, DEFAULT_BUILTIN_PHASE_TIMINGS, BASE_SPAWN_RATE, SPAWN_DRIFT_SPEED, MIN_PHASE_GREEN_SECONDS, MAX_TOTAL_LOOP_SECONDS, GRIDLOCK_QUEUE_HALT_THRESHOLD, clampPhaseTimingsToLoopCap, SIDEBAR_DEFAULT_WIDTH, ZOOM_STEP, MOBILE_SPLIT_HANDLE_PX, MOBILE_COLLAPSED_STRIP_PX, MOBILE_SPLIT_MAX_RATIO, HEAT_GRID_COLS, HEAT_GRID_ROWS, LOOP_LAG_LOG_MS, LOOP_HUD_MIN_INTERVAL_MS, MAX_SIM_INTEGRATION_STEP, LEGENDARY_SPAWN_CHANCE, LANE_MAP, LEFT_LANE_IDS, ADJACENT_RIGHT_MERGE_PAIR_KEYS, ADJACENT_LEFT_MERGE_PAIR_KEYS, STOP_LINE, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, HEATMAP_DECAY, HEATMAP_GAIN, HEATMAP_MAX, SKID_MARK_BRAKE_THRESHOLD, SKID_MARK_TTL_MS, MAX_SKID_MARK_SEGMENTS, BASE_SAFE_GAP, VEHICLE_COLORS } from './constants';
 import { useGlobalState } from './GlobalStateContext';
-import { loadSession, saveSession, narrowViewport, defaultZoom, MovementLabels, DIRECTIONS, getDirection, getMovementIcon, formatActiveMovements, hapticCrash, hapticHeavy, hapticError, playThunk, startAtmosphericHum, stopAtmosphericHum, type TimeScale } from './traffic';
+import { loadSession, saveSession, narrowViewport, defaultZoom, MovementLabels, DIRECTIONS, getDirection, getMovementIcon, formatActiveMovements, hapticCrash, hapticHeavy, hapticError, hapticTap, playThunk, startAtmosphericHum, stopAtmosphericHum, type TimeScale } from './traffic';
 import { IntersectionEngine, CrashInfo, RearTires, SkidMarkSegment, pickVehicleAtCanvasPoint, getPathEndPoint, renderVehicleSprite, getPathGeometry, getRearTirePositions } from './IntersectionEngine';
 import { clearPwaInstallDeferred, getPwaInstallDeferred, subscribePwaInstall, type PwaInstallPromptEvent } from './pwaInstallPrompt';
 import { Histogram, ManualOverlay, LevelSelect, GameIntro, FirmwareUpdatePrompt } from './CoreComponents';
 import vehicleCatalog from './data/vehicles.json';
+import { programMeetsBriefingDirectives } from './BriefingParser';
 
 let sysBootLogged = false;
 
-const docketFatalStorageKey = (levelId: string) => `traffic_docket_fatal_${levelId}`;
+function pickSpawnSpec(
+  prng: { next: () => number },
+  laneDirection: 'N' | 'S' | 'E' | 'W',
+  level: BriefingContent | undefined,
+): (typeof vehicleCatalog.spawnRollOrder)[number] | typeof vehicleCatalog.defaultSpawn {
+  const heavyTruckWest =
+    level != null &&
+    level.subject.toUpperCase().includes('HEAVY TRUCK CORRIDOR') &&
+    laneDirection === 'W';
+  const r = prng.next();
+  if (heavyTruckWest) {
+    const o = vehicleCatalog.spawnRollOrder;
+    if (r < 0.04) return o[0];
+    if (r < 0.11) return o[1];
+    if (r < 0.21) return o[2];
+    if (r < 0.52) return o[3];
+    return vehicleCatalog.defaultSpawn;
+  }
+  for (let si = 0; si < vehicleCatalog.spawnRollOrder.length; si++) {
+    const row = vehicleCatalog.spawnRollOrder[si];
+    if (r < row.rLessThan) return row;
+  }
+  return vehicleCatalog.defaultSpawn;
+}
 
-const snapVehicles = (vehicles: Vehicle[]): IncidentVehicleSnap[] =>
-  vehicles.map((v) => ({
-    id: v.id,
-    x: v.x,
-    y: v.y,
-    angle: v.angle,
-    vx: v.vx,
-    vy: v.vy,
-    laneId: v.laneId,
-    length: v.length,
-    width: v.width,
-    vType: v.vType,
-    color: v.color,
-    cruiseSpeed: v.cruiseSpeed,
-    originDir: v.originDir,
-  }));
+const docketFatalStorageKey = (levelId: string) => `traffic_docket_fatal_${levelId}`;
+const DRAFT_STORAGE_KEY = 'ogas_terminal_draft_v1';
 
 const collisionConflictRays = (a: Vehicle, b: Vehicle) => {
   const magA = Math.hypot(a.vx, a.vy);
@@ -301,6 +311,11 @@ export function useTrafficSimulation() {
     linesOfCode: number;
     hardwareCost: number;
   } | null>(null);
+  const [laneContextMenu, setLaneContextMenu] = useState<{
+    laneId: string;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
   const [isManualOpen, setIsManualOpen] = useState(false);
   const [manualInitialTab, setManualInitialTab] = useState<string | null>(null);
   const openManual = useCallback((tab?: string) => {
@@ -335,10 +350,10 @@ export function useTrafficSimulation() {
     const weights = currentLevel?.trafficWeights || { N: 1, S: 1, E: 1, W: 1 };
     
     setTrafficRates({
-        N: closed.some(id => id.startsWith('nb-')) ? 0 : (base * (weights.N ?? 1)),
-        S: closed.some(id => id.startsWith('sb-')) ? 0 : (base * (weights.S ?? 1)),
-        E: closed.some(id => id.startsWith('eb-')) ? 0 : (base * (weights.E ?? 1)),
-        W: closed.some(id => id.startsWith('wb-')) ? 0 : (base * (weights.W ?? 1))
+        N: LevelManager.isApproachFullyClosed(closed, 'N') ? 0 : (base * (weights.N ?? 1)),
+        S: LevelManager.isApproachFullyClosed(closed, 'S') ? 0 : (base * (weights.S ?? 1)),
+        E: LevelManager.isApproachFullyClosed(closed, 'E') ? 0 : (base * (weights.E ?? 1)),
+        W: LevelManager.isApproachFullyClosed(closed, 'W') ? 0 : (base * (weights.W ?? 1))
     });
   }, [activeLevelId, currentLevel]);
   const cycleCounterRef = useRef(0);
@@ -349,6 +364,7 @@ export function useTrafficSimulation() {
   const [compiledRules, setCompiledRules] = useState<ConditionalRule[]>([]);
   const [injectedPhase, setInjectedPhase] = useState<PhaseCommand[] | null>(null);
   const [programError, setProgramError] = useState<string>('');
+  const [programErrorLine, setProgramErrorLine] = useState<number | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [userTemplate, setUserTemplate] = useState(() => localStorage.getItem('traffic_user_template') || '');
 
@@ -470,23 +486,38 @@ export function useTrafficSimulation() {
     addLog("TEMPLATE_SAVED", "var(--green)");
   };
 
-  const compile = useCallback((codeToCompile?: string) => {
+  const compile = useCallback((codeToCompile?: string): boolean => {
     const code = codeToCompile ?? programCode;
     const constraints = currentLevel?.constraints;
     const result = parseTrafficProgram(code, constraints);
     if (result.error) {
       if (programError !== result.error) hapticError();
       setProgramError(result.error);
+      setProgramErrorLine(result.errorLine1Based ?? null);
       setCompiledPhases([]);
       setCompiledRules([]);
       setInjectedPhase(null);
       skipConditionalAfterInjectRef.current = false;
       setLightState('RED');
       setTimer(0);
-      return;
+      return false;
     }
     if (result.phases && result.phases.length > 0) {
+      const burnCheck = validateTrafficProgramForBurn(code, constraints);
+      if (!burnCheck.ok) {
+        if (programError !== burnCheck.error) hapticError();
+        setProgramError(burnCheck.error ?? '');
+        setProgramErrorLine(burnCheck.errorLine1Based ?? null);
+        setCompiledPhases([]);
+        setCompiledRules([]);
+        setInjectedPhase(null);
+        skipConditionalAfterInjectRef.current = false;
+        setLightState('RED');
+        setTimer(0);
+        return false;
+      }
       setProgramError('');
+      setProgramErrorLine(null);
       setCompiledPhases(result.phases);
       setCompiledRules(result.rules || []);
       const n = result.phases.length;
@@ -501,16 +532,18 @@ export function useTrafficSimulation() {
       skipConditionalAfterInjectRef.current = false;
       setLightState('GREEN');
       setTimer(0);
-      return;
+      return true;
     }
     setProgramError('');
+    setProgramErrorLine(null);
     setCompiledPhases([]);
     setCompiledRules([]);
     setInjectedPhase(null);
     skipConditionalAfterInjectRef.current = false;
     setLightState('RED');
     setTimer(0);
-  }, [programCode, activeLevelId, currentLevel]);
+    return false;
+  }, [programCode, activeLevelId, currentLevel, programError]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -518,6 +551,26 @@ export function useTrafficSimulation() {
     }, 500);
     return () => clearTimeout(timeout);
   }, [compile]);
+
+  useEffect(() => {
+    if (introPhase !== null) return;
+    const t = window.setTimeout(() => {
+      try {
+        localStorage.setItem(
+          DRAFT_STORAGE_KEY,
+          JSON.stringify({
+            activeLevelId,
+            programCode,
+            mobileScreen,
+            savedAt: Date.now(),
+          }),
+        );
+      } catch {
+        /* ignore */
+      }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [introPhase, activeLevelId, programCode, mobileScreen]);
 
   const vehiclesRef = useRef<Vehicle[]>([]);
   const forceRareSpawnRef = useRef(false);
@@ -528,10 +581,6 @@ export function useTrafficSimulation() {
   const requestRef = useRef<number>(null);
   const lastTimeRef = useRef<number>(null);
   const crashDetectedRef = useRef(false);
-  const incidentBufferRef = useRef<IncidentFrame[]>([]);
-  const lastIncidentSampleTimeRef = useRef(0);
-  const [incidentTape, setIncidentTape] = useState<IncidentFrame[] | null>(null);
-  const [incidentPlaybackIndex, setIncidentPlaybackIndex] = useState(0);
   const loopUpdateSectionsRef = useRef<Record<string, number>>({});
   const loopDrawSectionsRef = useRef<Record<string, number>>({});
   const loopTotalMsWindowRef = useRef<number[]>([]);
@@ -759,7 +808,8 @@ export function useTrafficSimulation() {
           const next = { ...prev };
           const closed = currentLevel?.closedLanes || [];
           Object.keys(next).forEach(dir => {
-            const isClosed = closed.some(id => id.startsWith(dir.toLowerCase() + 'b-'));
+            const d = dir as 'N' | 'S' | 'E' | 'W';
+            const isClosed = LevelManager.isApproachFullyClosed(closed, d);
             if (isClosed) {
               next[dir] = 0;
               return;
@@ -963,15 +1013,7 @@ export function useTrafficSimulation() {
             // Logic optimization: If the car ahead is moving, reduce the required distance to enter
             const currentLaneSpeed = carsInLane.length > 0 ? Math.abs(carsInLane[0].vy || carsInLane[0].vx) : 0;
             
-            const r = prngRef.current.next();
-            let spec = vehicleCatalog.defaultSpawn;
-            for (let si = 0; si < vehicleCatalog.spawnRollOrder.length; si++) {
-              const row = vehicleCatalog.spawnRollOrder[si];
-              if (r < row.rLessThan) {
-                spec = row;
-                break;
-              }
-            }
+            const spec = pickSpawnSpec(prngRef.current, lane.direction, currentLevel);
             const vType = spec.vType as VehicleType;
             const width = spec.width;
             const length = spec.length;
@@ -1214,6 +1256,11 @@ export function useTrafficSimulation() {
       } else {
           v.brakeIntensity = 0;
       }
+      if (mustStopForLight && newSpeed < 0.12 && distToStop > 0 && distToStop < 120) {
+        v.waitStress = Math.min(1, (v.waitStress ?? 0) + simStep * 0.07);
+      } else {
+        v.waitStress = Math.max(0, (v.waitStress ?? 0) - simStep * 0.2);
+      }
       const isStopped = newSpeed < 0.1;
       const heatLoad = (isStopped ? 1 : 0) + (v.brakeIntensity || 0);
       if (heatLoad > 0) {
@@ -1354,22 +1401,12 @@ export function useTrafficSimulation() {
     if (skidMarksRef.current.length > MAX_SKID_MARK_SEGMENTS) {
       skidMarksRef.current.splice(0, skidMarksRef.current.length - MAX_SKID_MARK_SEGMENTS);
     }
-    if (isPlayingRef.current && !crashDetectedRef.current) {
-      if (time - lastIncidentSampleTimeRef.current >= 100) {
-        lastIncidentSampleTimeRef.current = time;
-        incidentBufferRef.current.push({ vehicles: snapVehicles(vehicles) });
-        if (incidentBufferRef.current.length > 50) incidentBufferRef.current.shift();
-      }
-    }
     if (!crashDetectedRef.current) {
       const phaseCount = compiledPhases.length > 0 ? compiledPhases.length : 4;
       let greenSum = 0;
       for (let i = 0; i < phaseCount; i++) greenSum += phaseTimings[i] ?? DEFAULT_PHASE_GREEN_SECONDS;
       if (greenSum > MAX_TOTAL_LOOP_SECONDS) {
         crashDetectedRef.current = true;
-        setIncidentTape([{ vehicles: snapVehicles(vehicles) }]);
-        setIncidentPlaybackIndex(0);
-        incidentBufferRef.current = [];
         setCrashInfo({
           x: CANVAS_SIZE * 0.5,
           y: CANVAS_SIZE * 0.5,
@@ -1386,19 +1423,19 @@ export function useTrafficSimulation() {
         hapticCrash();
       } else {
         const qSnap = offScreenQueuesRef.current;
+        const fc = currentLevel?.failureConditions;
         for (const lane of LANES) {
           if (currentLevel?.closedLanes?.includes(lane.id)) continue;
           const q = qSnap[lane.id] || 0;
-          if (q >= GRIDLOCK_QUEUE_HALT_THRESHOLD) {
+          const haltThreshold =
+            fc?.maxQueueByLaneId?.[lane.id] ?? fc?.maxQueueLength ?? GRIDLOCK_QUEUE_HALT_THRESHOLD;
+          if (q >= haltThreshold) {
             crashDetectedRef.current = true;
-            setIncidentTape([{ vehicles: snapVehicles(vehicles) }]);
-            setIncidentPlaybackIndex(0);
-            incidentBufferRef.current = [];
             setCrashInfo({
               x: CANVAS_SIZE * 0.5,
               y: CANVAS_SIZE * 0.5,
               laneA: lane.id,
-              laneB: 'BUFFER_OVERFLOW',
+              laneB: 'GRIDLOCK_OVERFLOW',
               vehicleIds: ['—', '—'],
               type: 'OVERFLOW',
               laneCongestion: { ...qSnap },
@@ -1416,10 +1453,6 @@ export function useTrafficSimulation() {
           const collision = detectCrash(vehicles);
           if (collision) {
             crashDetectedRef.current = true;
-            const finalSnap = snapVehicles(vehicles);
-            setIncidentTape([...incidentBufferRef.current, { vehicles: finalSnap }]);
-            setIncidentPlaybackIndex(incidentBufferRef.current.length);
-            incidentBufferRef.current = [];
             try {
               sessionStorage.setItem(docketFatalStorageKey(activeLevelId), '1');
             } catch {
@@ -1452,12 +1485,11 @@ export function useTrafficSimulation() {
       const minOk =
         minReq == null ||
         dirs.every((d) => {
-          const prefix = d === 'N' ? 'nb-' : d === 'S' ? 'sb-' : d === 'E' ? 'eb-' : 'wb-';
-          const closed = currentLevel.closedLanes;
-          const spawnOff = closed?.some((id) => id.startsWith(prefix)) ?? false;
+          const spawnOff = LevelManager.isApproachFullyClosed(currentLevel.closedLanes, d);
           return spawnOff || byDir[d] >= minReq;
         });
-      const winReady = cleared >= wc.clearCars && minOk;
+      const directivesOk = programMeetsBriefingDirectives(currentLevel, compiledPhases, compiledRules);
+      const winReady = cleared >= wc.clearCars && minOk && directivesOk;
       if (winReady) {
         winSettleRef.current += 1;
         if (winSettleRef.current >= 4) {
@@ -1488,6 +1520,11 @@ export function useTrafficSimulation() {
           if (currentLevel.nextLevelId) {
             unlockLevel(currentLevel.nextLevelId);
           }
+          try {
+            localStorage.removeItem(DRAFT_STORAGE_KEY);
+          } catch {
+            /* ignore */
+          }
           setLevelCompleteInfo({
             carsCleared: cleared,
             timeSeconds: wallSecs,
@@ -1510,6 +1547,7 @@ export function useTrafficSimulation() {
     currentLevel,
     activeLevelId,
     compiledPhases,
+    compiledRules,
     phaseTimings,
     programCode,
     saveHighscore,
@@ -1530,13 +1568,10 @@ export function useTrafficSimulation() {
     const centerY = CANVAS_SIZE / 2;
 
     /* currentLevel mapped by useMemo */
-    const closedDirections = new Set<string>();
+    const closedDirections = new Set<'N' | 'S' | 'E' | 'W'>();
     if (currentLevel?.closedLanes) {
-      currentLevel.closedLanes.forEach(laneId => {
-        if (laneId.startsWith('nb-')) closedDirections.add('N');
-        if (laneId.startsWith('sb-')) closedDirections.add('S');
-        if (laneId.startsWith('eb-')) closedDirections.add('E');
-        if (laneId.startsWith('wb-')) closedDirections.add('W');
+      (['N', 'S', 'E', 'W'] as const).forEach((d) => {
+        if (LevelManager.isApproachFullyClosed(currentLevel.closedLanes, d)) closedDirections.add(d);
       });
     }
 
@@ -1747,18 +1782,12 @@ export function useTrafficSimulation() {
       ctx.save();
       const pad = 6;
       const hw = INTERSECTION_SIZE / 2 + pad;
+      const x0 = centerX - hw;
+      const y0 = centerY - hw;
       ctx.strokeStyle = crashInfo ? 'rgba(248,81,73,0.5)' : 'rgba(88,166,255,0.38)';
       ctx.lineWidth = crashInfo ? 2.5 : 2;
-      ctx.setLineDash([6, 5]);
-      ctx.strokeRect(centerX - hw, centerY - hw, hw * 2, hw * 2);
       ctx.setLineDash([]);
-      if (bgFontsReady) {
-        ctx.font = '10px "JetBrains Mono", monospace';
-        ctx.fillStyle = crashInfo ? 'rgba(248,81,73,0.92)' : 'rgba(88,166,255,0.88)';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText('CONFLICT_PLANE — LOGIC PROBE', centerX - hw, centerY - hw - 6);
-      }
+      ctx.strokeRect(x0, y0, hw * 2, hw * 2);
       ctx.restore();
     }
 
@@ -1846,7 +1875,7 @@ export function useTrafficSimulation() {
         ctx.arc(0, posY, 5, 0, Math.PI * 2);
         ctx.fill();
 
-        if (isOn) {
+        if (isOn && state !== 'RED') {
             ctx.globalAlpha = 0.4;
             ctx.beginPath();
             ctx.arc(0, posY, 8, 0, Math.PI * 2);
@@ -1892,14 +1921,7 @@ export function useTrafficSimulation() {
     d.queueLabels = performance.now() - md;
     md = performance.now();
 
-    const incidentDrawActive =
-      Boolean(
-        incidentTape &&
-          crashInfo &&
-          incidentPlaybackIndex >= 0 &&
-          incidentPlaybackIndex < incidentTape.length,
-      );
-    const vehiclesDraw = incidentDrawActive ? incidentTape![incidentPlaybackIndex].vehicles : vehiclesRef.current;
+    const vehiclesDraw = vehiclesRef.current;
 
     vehiclesDraw.forEach((v) => {
       ctx.save();
@@ -1946,14 +1968,11 @@ export function useTrafficSimulation() {
     d.vehicles = performance.now() - md;
     md = performance.now();
 
-    const atIncidentEnd =
-      !incidentTape || incidentPlaybackIndex >= incidentTape.length - 1;
     if (
       crashInfo &&
       (!crashInfo.type || crashInfo.type === 'COLLISION') &&
       crashInfo.conflictRays &&
-      crashInfo.conflictRays.length > 0 &&
-      atIncidentEnd
+      crashInfo.conflictRays.length > 0
     ) {
       ctx.save();
       ctx.strokeStyle = 'rgba(248, 81, 73, 0.55)';
@@ -1974,8 +1993,6 @@ export function useTrafficSimulation() {
     }
 
     if (
-      incidentDrawActive &&
-      atIncidentEnd &&
       crashInfo &&
       crashInfo.type === 'COLLISION' &&
       crashInfo.vehicleIds[0] !== '—'
@@ -2097,8 +2114,6 @@ export function useTrafficSimulation() {
     activeLevelId,
     currentLevel,
     isPlaying,
-    incidentTape,
-    incidentPlaybackIndex,
   ]);
 
   const updateRef = useRef(update);
@@ -2176,10 +2191,6 @@ export function useTrafficSimulation() {
   }, [loop]);
 
   useEffect(() => {
-    triggerRedraw();
-  }, [incidentPlaybackIndex, incidentTape, triggerRedraw]);
-
-  useEffect(() => {
     if (introPhase !== null) return;
     triggerRedraw();
     return () => {
@@ -2242,6 +2253,38 @@ export function useTrafficSimulation() {
   const enterGameFromIntro = useCallback(() => {
     hapticHeavy();
     stopAtmosphericHum();
+    try {
+      const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (raw) {
+        const d = JSON.parse(raw) as {
+          activeLevelId?: string;
+          programCode?: string;
+          mobileScreen?: string;
+          savedAt?: number;
+        };
+        const maxAge = 7 * 86400000;
+        if (
+          typeof d.activeLevelId === 'string' &&
+          typeof d.programCode === 'string' &&
+          typeof d.savedAt === 'number' &&
+          Date.now() - d.savedAt < maxAge &&
+          level1Briefing.some((l) => l.id === d.activeLevelId)
+        ) {
+          setActiveLevelId(d.activeLevelId);
+          setProgramCode(d.programCode);
+          const tab = d.mobileScreen;
+          if (tab === 'briefing' || tab === 'logic' || tab === 'metrics') {
+            setMobileScreen(tab as 'briefing' | 'logic' | 'metrics');
+          }
+          setIntroPhase(null);
+          isPlayingRef.current = false;
+          setIsPlaying(false);
+          return;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
     setIntroPhase(null);
     isPlayingRef.current = false;
     setIsPlaying(false);
@@ -2393,7 +2436,46 @@ export function useTrafficSimulation() {
     }
     inspectPaintRef.current = null;
     setInspectPanel(null);
-  }, []);
+
+    if (!currentLevel?.isSandbox && compiledPhases.length > 0) {
+      let hitLane: Lane | null = null;
+      let minDistance = 48;
+      for (const lane of LANES) {
+        if (currentLevel?.closedLanes?.includes(lane.id)) continue;
+        const A = px - lane.startX;
+        const B = py - lane.startY;
+        const C = lane.endX - lane.startX;
+        const D = lane.endY - lane.startY;
+        const dot = A * C + B * D;
+        const lenSq = C * C + D * D;
+        let param = -1;
+        if (lenSq !== 0) param = dot / lenSq;
+        let xx: number;
+        let yy: number;
+        if (param < 0) {
+          xx = lane.startX;
+          yy = lane.startY;
+        } else if (param > 1) {
+          xx = lane.endX;
+          yy = lane.endY;
+        } else {
+          xx = lane.startX + param * C;
+          yy = lane.startY + param * D;
+        }
+        const dx = px - xx;
+        const dy = py - yy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < minDistance) {
+          minDistance = dist;
+          hitLane = lane;
+        }
+      }
+      if (hitLane) {
+        setLaneContextMenu({ laneId: hitLane.id, clientX: e.clientX, clientY: e.clientY });
+        hapticTap();
+      }
+    }
+  }, [wiringPhaseIndex, compiledPhases, currentLevel, addLog, setProgramCode]);
 
   const startSidebarResize = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -2455,11 +2537,8 @@ export function useTrafficSimulation() {
     previousRearTiresRef.current = {};
     crashDetectedRef.current = false;
     setCrashInfo(null);
-    setIncidentTape(null);
-    setIncidentPlaybackIndex(0);
-    incidentBufferRef.current = [];
-    lastIncidentSampleTimeRef.current = 0;
     setLevelCompleteInfo(null);
+    setLaneContextMenu(null);
     setIsFreeplay(false);
     setIsCrashModalMinimized(false);
     setOffScreenQueues({});
@@ -2491,9 +2570,6 @@ export function useTrafficSimulation() {
     previousRearTiresRef.current = {};
     crashDetectedRef.current = false;
     setCrashInfo(null);
-    setIncidentTape(null);
-    setIncidentPlaybackIndex(0);
-    incidentBufferRef.current = [];
     setIsCrashModalMinimized(false);
     setOffScreenQueues({});
     inspectPaintRef.current = null;
@@ -2523,9 +2599,9 @@ export function useTrafficSimulation() {
     zoom, setZoom, pan, setPan, isDraggingCanvasRef, dragStartCanvasRef, panStartRef, hasDraggedRef,
     activePointersRef, pinchStartDistRef, pinchStartZoomRef, timeScale, setTimeScale, timeScaleRef,
     showHeatmap, setShowHeatmap, loopLastMs, setLoopLastMs, loopAvg10Ms, setLoopAvg10Ms, crashInfo, setCrashInfo,
-    incidentTape, incidentPlaybackIndex, setIncidentPlaybackIndex,
     hardwareBudget,
     isCrashModalMinimized, setIsCrashModalMinimized, levelCompleteInfo, setLevelCompleteInfo,
+    laneContextMenu, setLaneContextMenu,
     isOptimizing, setIsOptimizing, toasts, addToast,
     isManualOpen,
     setIsManualOpen,
@@ -2538,7 +2614,7 @@ export function useTrafficSimulation() {
     setIsStandaloneDisplay,
     cycleDemandRef, skipConditionalAfterInjectRef, cycleCounterRef,
     programCode, setProgramCode, compiledPhases, setCompiledPhases, compiledRules, setCompiledRules,
-    injectedPhase, setInjectedPhase, programError, setProgramError, isEditMode, setIsEditMode,
+    injectedPhase, setInjectedPhase, programError, setProgramError, programErrorLine, setProgramErrorLine, isEditMode, setIsEditMode,
     userTemplate, setUserTemplate, cmdDir, setCmdDir, cmdTurn, setCmdTurn,
     appendCommand, appendPhase, deleteLastLine, saveUserTemplate, compile,
     vehiclesRef, forceRareSpawnRef, forceLegendarySpawnRef, laneCarsCacheRef, skidMarksRef,

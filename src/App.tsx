@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronUp, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Plus, Minus, Trash2, Download, Mail, Terminal, Map as MapIcon, BookOpen, Menu } from 'lucide-react';
+import { Settings, Play, Pause, RotateCcw, Car as CarIcon, ArrowUp, ArrowLeft, ChevronDown, ChevronUp, ChevronRight, Activity, PanelLeftClose, PanelLeftOpen, CornerUpLeft, CornerUpRight, Plus, Minus, Trash2, Download, Mail, Terminal, Map as MapIcon, BookOpen, Menu, Loader2 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import {
   VehicleInspectTooltip,
@@ -16,14 +16,15 @@ import {
 } from './UI';
 import { manualHelpTabForCompilerMessage } from './manualAppendix';
 import { AnalyticalChart, QueueChart } from './Charts';
-import { CTA, hudSiteTitle } from './branding';
+import { CTA, hudSiteTitle, getMetricTier } from './branding';
 import { APP_BUILD_VERSION } from './generatedVersion';
-import { Histogram, ManualOverlay, LevelSelect, GameIntro, FirmwareUpdatePrompt } from './CoreComponents';
+import { Histogram, ManualOverlay, LevelSelect, GameIntro, FirmwareUpdatePrompt, LaneMinimapPip } from './CoreComponents';
 import { level1Briefing } from './types';
 import { MobileEditor } from './MobileEditor';
 import { useTrafficSimulation } from './useTrafficSimulation';
-import { hapticHeavy, hapticTap, hapticCrash, hapticError, playThunk, startAtmosphericHum, stopAtmosphericHum, getMovementIcon, MovementLabels, getDirection, DIRECTIONS, TIME_SCALE_OPTIONS } from './traffic';
-import { LANES, CANVAS_SIZE, MAX_TOTAL_LOOP_SECONDS, DEFAULT_PHASE_GREEN_SECONDS, MIN_PHASE_GREEN_SECONDS, INTERSECTION_SIZE, STOP_LINE, LANE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from './constants';
+import { hapticHeavy, hapticTap, hapticCrash, hapticError, playThunk, startAtmosphericHum, stopAtmosphericHum, getMovementIcon, MovementLabels, getDirection, DIRECTIONS, TIME_SCALE_OPTIONS, phaseIndicesWithGoForLane, firstProgramLineForLaneToken } from './traffic';
+import { LANES, CANVAS_SIZE, MAX_TOTAL_LOOP_SECONDS, DEFAULT_PHASE_GREEN_SECONDS, MIN_PHASE_GREEN_SECONDS, INTERSECTION_SIZE, STOP_LINE, LANE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, LANE_MAP } from './constants';
+import { validateTrafficProgramForBurn } from './interpreter';
 
 export default function App() {
   const {
@@ -45,9 +46,9 @@ export default function App() {
     zoom, setZoom, pan, setPan, isDraggingCanvasRef, dragStartCanvasRef, panStartRef, hasDraggedRef,
     activePointersRef, pinchStartDistRef, pinchStartZoomRef, timeScale, setTimeScale, timeScaleRef,
     showHeatmap, setShowHeatmap, loopLastMs, setLoopLastMs, loopAvg10Ms, setLoopAvg10Ms, crashInfo, setCrashInfo,
-    incidentTape, incidentPlaybackIndex, setIncidentPlaybackIndex,
     hardwareBudget,
     isCrashModalMinimized, setIsCrashModalMinimized, levelCompleteInfo, setLevelCompleteInfo,
+    laneContextMenu, setLaneContextMenu,
     isOptimizing, setIsOptimizing, toasts, addToast,
     isManualOpen,
     setIsManualOpen,
@@ -59,7 +60,7 @@ export default function App() {
     setIsStandaloneDisplay,
     cycleDemandRef, skipConditionalAfterInjectRef, cycleCounterRef,
     programCode, setProgramCode, compiledPhases, setCompiledPhases, compiledRules, setCompiledRules,
-    injectedPhase, setInjectedPhase, programError, setProgramError, isEditMode, setIsEditMode,
+    injectedPhase, setInjectedPhase, programError, setProgramError, programErrorLine, setProgramErrorLine, isEditMode, setIsEditMode,
     cmdDir, setCmdDir, cmdTurn, setCmdTurn,
     appendCommand, appendPhase, deleteLastLine, compile,
     vehiclesRef, forceRareSpawnRef, forceLegendarySpawnRef, laneCarsCacheRef, skidMarksRef,
@@ -72,13 +73,170 @@ export default function App() {
     phaseRowCount, cycleLength, sidebarColumnWidth, engineeringTemplateBlurb
   } = useTrafficSimulation();
 
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [pipLaneId, setPipLaneId] = useState<string | null>(null);
+  const [editorJumpLine, setEditorJumpLine] = useState<number | null>(null);
+
   const [eepromBurn, setEepromBurn] = useState<{ progress: number; line: string } | null>(null);
   const burnTimerRef = useRef<number | null>(null);
+  const [logicImageValidated, setLogicImageValidated] = useState(false);
+  const [logicValidating, setLogicValidating] = useState(false);
+  const logicDeployEpochRef = useRef(0);
   useEffect(() => {
     return () => {
       if (burnTimerRef.current != null) window.clearInterval(burnTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    logicDeployEpochRef.current += 1;
+    setLogicValidating(false);
+    setLogicImageValidated(false);
+  }, [programCode, activeLevelId]);
+
+  const startLogicValidation = useCallback(() => {
+    if (hardwareBudget.procurementBlocked && !currentLevel?.isSandbox) {
+      addToast('BEYOND_AUTHORIZED_PROCUREMENT — EEPROM interlock.', 'info');
+      return;
+    }
+    hapticHeavy();
+    const epoch = logicDeployEpochRef.current;
+    setProgramError('');
+    setProgramErrorLine(null);
+    setLogicValidating(true);
+    window.setTimeout(() => {
+      if (epoch !== logicDeployEpochRef.current) {
+        setLogicValidating(false);
+        return;
+      }
+      const r = validateTrafficProgramForBurn(programCode, currentLevel?.constraints);
+      if (epoch !== logicDeployEpochRef.current) {
+        setLogicValidating(false);
+        return;
+      }
+      setLogicValidating(false);
+      if (!r.ok) {
+        setProgramError(r.error ?? '');
+        setProgramErrorLine(r.errorLine1Based ?? null);
+        hapticError();
+        return;
+      }
+      if (hardwareBudget.procurementBlocked && !currentLevel?.isSandbox) {
+        addToast('BEYOND_AUTHORIZED_PROCUREMENT — EEPROM interlock.', 'info');
+        return;
+      }
+      if (!compile()) {
+        hapticError();
+        return;
+      }
+      setLogicImageValidated(true);
+    }, 520);
+  }, [
+    programCode,
+    currentLevel?.constraints,
+    currentLevel?.isSandbox,
+    hardwareBudget.procurementBlocked,
+    compile,
+    setProgramError,
+    setProgramErrorLine,
+    addToast,
+  ]);
+
+  const startMobileBurnRun = useCallback(() => {
+    if (hardwareBudget.procurementBlocked && !currentLevel?.isSandbox) {
+      addToast('BEYOND_AUTHORIZED_PROCUREMENT — EEPROM interlock.', 'info');
+      return;
+    }
+    hapticHeavy();
+    if (!compile()) {
+      hapticError();
+      return;
+    }
+    const lines = [
+      'WRITING SECTOR 0xAF…',
+      'VERIFYING CHECKSUM…',
+      'LATCHING RELAYS…',
+      'ARMING OGAS HANDSHAKE…',
+    ];
+    let step = 0;
+    if (burnTimerRef.current != null) window.clearInterval(burnTimerRef.current);
+    setEepromBurn({ progress: 0, line: lines[0] });
+    burnTimerRef.current = window.setInterval(() => {
+      step += 1;
+      const progress = Math.min(1, step / 26);
+      setEepromBurn({
+        progress,
+        line: lines[Math.min(lines.length - 1, Math.floor(progress * lines.length))],
+      });
+      if (progress >= 1 && burnTimerRef.current != null) {
+        window.clearInterval(burnTimerRef.current);
+        burnTimerRef.current = null;
+        setEepromBurn(null);
+        addLog('LOGIC_IMAGE_BURNED', 'var(--green)');
+        resetDirectiveRunProgress();
+        setZoom(0.8);
+        isPlayingRef.current = true;
+        setIsPlaying(true);
+        setMobileScreen('metrics');
+        setMobileSplitHeight(mobileMinSplitPct);
+        setLogicImageValidated(false);
+      }
+    }, 65);
+  }, [
+    hardwareBudget.procurementBlocked,
+    currentLevel?.isSandbox,
+    compile,
+    addLog,
+    resetDirectiveRunProgress,
+    setZoom,
+    isPlayingRef,
+    setIsPlaying,
+    setMobileScreen,
+    setMobileSplitHeight,
+    mobileMinSplitPct,
+    addToast,
+  ]);
+
+  const startDesktopBurnRun = useCallback(() => {
+    if (hardwareBudget.procurementBlocked && !currentLevel?.isSandbox) {
+      addToast('BEYOND_AUTHORIZED_PROCUREMENT — EEPROM interlock.', 'info');
+      return;
+    }
+    if (!compile()) {
+      hapticError();
+      return;
+    }
+    addLog('LOGIC_IMAGE_BURNED', 'var(--green)');
+    setIsEditMode(false);
+    setLogicImageValidated(false);
+  }, [
+    hardwareBudget.procurementBlocked,
+    currentLevel?.isSandbox,
+    compile,
+    addLog,
+    setIsEditMode,
+    addToast,
+  ]);
+
+  useEffect(() => {
+    if (mobileScreen !== 'logic') setPipLaneId(null);
+  }, [mobileScreen]);
+
+  useEffect(() => {
+    if (editorJumpLine == null) return;
+    const t = window.setTimeout(() => setEditorJumpLine(null), 3200);
+    return () => clearTimeout(t);
+  }, [editorJumpLine]);
+
+  useEffect(() => {
+    if (!laneContextMenu) return;
+    const h = () => setLaneContextMenu(null);
+    const tid = window.setTimeout(() => document.addEventListener('pointerdown', h, true), 60);
+    return () => {
+      clearTimeout(tid);
+      document.removeEventListener('pointerdown', h, true);
+    };
+  }, [laneContextMenu, setLaneContextMenu]);
 
   const procurementLocked = hardwareBudget.procurementBlocked && !currentLevel?.isSandbox;
 
@@ -98,10 +256,52 @@ export default function App() {
   const lastQueueEntry = queueHistory[queueHistory.length - 1];
   const totalCongestion = lastQueueEntry ? LANES.reduce((sum, lane) => sum + (lastQueueEntry[lane.id] as number || 0), 0) : 0;
 
+  const laneMetaForProbe = laneContextMenu ? LANE_MAP.get(laneContextMenu.laneId) : undefined;
+  const goPhaseList = laneContextMenu ? phaseIndicesWithGoForLane(laneContextMenu.laneId, compiledPhases) : [];
+  const laneProbePanel = laneContextMenu ? (
+    <div
+      className="fixed z-[90] max-w-[min(288px,calc(100vw-20px))] rounded border border-[#3FB950]/45 bg-[#0D0F12] p-3 font-mono shadow-[0_0_28px_rgba(0,0,0,0.55)] pointer-events-auto"
+      style={{
+        left: Math.min(
+          typeof window !== 'undefined' ? window.innerWidth - 296 : 400,
+          Math.max(8, laneContextMenu.clientX - 8),
+        ),
+        top: laneContextMenu.clientY + 8,
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div className="text-[10px] font-bold uppercase tracking-widest text-[#3FB950] mb-1.5">Approach probe</div>
+      <div className="text-[11px] text-[#C9D1D9] mb-2 font-bold">
+        {laneMetaForProbe ? MovementLabels[laneMetaForProbe.movement] : laneContextMenu.laneId}
+      </div>
+      <div className="text-[9px] text-[#8B949E] uppercase tracking-wide mb-1">Phases with hard .GO</div>
+      <div className="text-[12px] text-[#58A6FF] font-mono">
+        {goPhaseList.length > 0 ? goPhaseList.map((p) => `P${p}`).join(' · ') : '—'}
+      </div>
+      <button
+        type="button"
+        className="mt-3 w-full rounded border border-[#58A6FF]/50 bg-[#58A6FF]/12 py-2 text-[10px] font-bold uppercase tracking-wide text-[#58A6FF]"
+        onClick={() => {
+          const line = firstProgramLineForLaneToken(programCode, laneContextMenu.laneId);
+          if (isMobilePortrait) {
+            setMobileScreen('logic');
+            if (line) setEditorJumpLine(line);
+          } else if (line && editorRef.current) {
+            editorRef.current.revealLineInCenter(line);
+            editorRef.current.setPosition({ lineNumber: line, column: 1 });
+          }
+          setLaneContextMenu(null);
+        }}
+      >
+        Open in logic editor
+      </button>
+    </div>
+  ) : null;
+
   if (isMobilePortrait) {
     return (
       <div
-        className={`h-[100dvh] w-full flex flex-col bg-[#0D0F12] overflow-hidden border-2 border-[#2D333B] relative${isManualOpen ? '' : ' crt-bezel'}`}
+        className={`h-[100dvh] w-full flex flex-col bg-[#0D0F12] overflow-hidden border-2 border-[#2D333B] relative${isManualOpen ? '' : isMobilePortrait ? ' crt-bezel-mobile' : ' crt-bezel'}`}
       >
         {/* Technical Overlays */}
         <div className="pointer-events-none absolute top-14 left-4 font-mono text-[8px] text-[#8B949E] flex flex-col gap-0.5 opacity-30 z-0">
@@ -241,106 +441,89 @@ export default function App() {
                     <div className="text-[10px] text-[#56D364] font-mono uppercase tracking-wide leading-tight">{engineeringTemplateBlurb.title}</div>
                     <div className="text-[10px] text-[#b7bdc8] font-mono leading-snug">{engineeringTemplateBlurb.body}</div>
                   </div>
-                  <div className="flex min-h-0 flex-1 flex-col">
-                    <MobileEditor
-                      programCode={programCode}
-                      setProgramCode={setProgramCode}
-                      closedLanes={(level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0]).closedLanes}
-                      appendPhase={appendPhase}
-                      deleteLastLine={deleteLastLine}
-                      activePhaseIndex={currentPhase}
-                      isPlaying={isPlaying}
-                      maxPhases={(level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0]).constraints?.maxPhases}
-                    />
-                  </div>
-                  <ProgramCompileError
-                    message={programError}
-                    helpTab={manualHelpTabForCompilerMessage(programError)}
-                    onOpenManualHelp={(tab) => openManual(tab)}
-                  />
-                  <div className="mt-auto space-y-2 pt-2 pb-2">
-                    {!currentLevel?.isSandbox && (
-                      <div className="rounded border border-[#30363d] bg-black/40 px-2 py-1.5 font-mono text-[9px] text-[#8B949E]">
-                        <div className="flex justify-between uppercase tracking-wider">
-                          <span>BOM meter</span>
-                          <span className={procurementLocked ? 'text-[#F85149]' : 'text-[#3FB950]'}>
-                            {hardwareBudget.rawBom} / {hardwareBudget.ceiling} ¥
-                          </span>
-                        </div>
-                        <div className="mt-1 h-1.5 w-full overflow-hidden rounded-sm bg-[#21262d]">
-                          <div
-                            className={`h-full ${procurementLocked ? 'bg-[#F85149]' : 'bg-[#3FB950]'}`}
-                            style={{ width: `${Math.min(100, (hardwareBudget.rawBom / hardwareBudget.ceiling) * 100)}%` }}
-                          />
-                        </div>
+                  <div className="flex min-h-0 flex-1 flex-col gap-0">
+                    <div className="flex min-h-0 flex-1 flex-col">
+                      <MobileEditor
+                        programCode={programCode}
+                        setProgramCode={setProgramCode}
+                        closedLanes={(level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0]).closedLanes}
+                        appendPhase={appendPhase}
+                        deleteLastLine={deleteLastLine}
+                        activePhaseIndex={currentPhase}
+                        isPlaying={isPlaying}
+                        maxPhases={(level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0]).constraints?.maxPhases}
+                        allowYield={true /* todo: derive from tier or logic */}
+                        highlightSourceLine={programErrorLine ?? editorJumpLine}
+                        liteChrome
+                        onMovementLaneFocus={(id) => setPipLaneId(id)}
+                        compileError={programError}
+                        compileErrorHelpTab={manualHelpTabForCompilerMessage(programError)}
+                        onOpenCompileErrorHelp={(tab) => openManual(tab)}
+                        editorQuickRef={(level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0]).editorQuickRef}
+                        bomMeter={
+                          !currentLevel?.isSandbox && getMetricTier(level1Briefing.findIndex(l => l.id === activeLevelId)) >= 3 ? (
+                            <div className="shrink-0 rounded border border-[#30363d] bg-black/40 px-2 py-1.5 font-mono text-[9px] text-[#8B949E]">
+                              <div className="flex justify-between uppercase tracking-wider">
+                                <span>BOM meter</span>
+                                <span className={procurementLocked ? 'text-[#F85149]' : 'text-[#3FB950]'}>
+                                  {hardwareBudget.rawBom} / {hardwareBudget.ceiling} ¥
+                                </span>
+                              </div>
+                              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-sm bg-[#21262d]">
+                                <div
+                                  className={`h-full ${procurementLocked ? 'bg-[#F85149]' : 'bg-[#3FB950]'}`}
+                                  style={{ width: `${Math.min(100, (hardwareBudget.rawBom / hardwareBudget.ceiling) * 100)}%` }}
+                                />
+                              </div>
+                              {procurementLocked && (
+                                <div className="mt-1 text-[8px] font-bold uppercase tracking-wide text-[#F85149]">
+                                  Beyond authorized procurement
+                                </div>
+                              )}
+                            </div>
+                          ) : undefined
+                        }
+                      />
+                    </div>
+                    <div className="mt-0 shrink-0 space-y-2 p-0 m-0">
+                      <div className="relative">
                         {procurementLocked && (
-                          <div className="mt-1 text-[8px] font-bold uppercase tracking-wide text-[#F85149]">
-                            Beyond authorized procurement
+                          <div className="pointer-events-none absolute -inset-1 z-10 rounded border-2 border-[#F85149]/70 bg-[#F85149]/10 shadow-[0_0_20px_rgba(248,81,73,0.2)]" />
+                        )}
+                        {logicValidating && (
+                          <div className="relative z-[1] mb-2 flex items-center justify-center gap-2 rounded border border-[#D29922]/50 bg-black/60 py-3 font-mono text-[10px] font-bold uppercase tracking-[0.15em] text-[#D29922]">
+                            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                            <span>Validating logic image…</span>
                           </div>
                         )}
-                      </div>
-                    )}
-                    <div className="relative">
-                      {procurementLocked && (
-                        <div className="pointer-events-none absolute -inset-1 z-10 rounded border-2 border-[#F85149]/70 bg-[#F85149]/10 shadow-[0_0_20px_rgba(248,81,73,0.2)]" />
-                      )}
-                      <button
-                        type="button"
-                        disabled={!!eepromBurn || procurementLocked}
-                        onClick={() => {
-                          if (procurementLocked) {
-                            addToast('BEYOND_AUTHORIZED_PROCUREMENT — EEPROM interlock.', 'info');
-                            return;
+                        <button
+                          type="button"
+                          disabled={!!eepromBurn || procurementLocked || logicValidating}
+                          onClick={() => {
+                            if (logicImageValidated) startMobileBurnRun();
+                            else startLogicValidation();
+                          }}
+                          className={
+                            logicImageValidated
+                              ? 'relative z-[1] m-0 w-full text-[14px] bg-[#58A6FF]/10 py-3 font-bold uppercase tracking-[0.2em] shadow-[inset_0_0_20px_rgba(88,166,255,0.12)] transition-colors disabled:cursor-not-allowed disabled:opacity-40 border-y-2 border-[#58A6FF] text-[#58A6FF] hover:bg-[#58A6FF]/20'
+                              : 'relative z-[1] m-0 w-full text-[14px] bg-[#3FB950]/10 py-3 font-bold uppercase tracking-[0.2em] shadow-[inset_0_0_20px_rgba(63,185,80,0.1)] transition-colors disabled:cursor-not-allowed disabled:opacity-40 border-y-2 border-[#3FB950] text-[#3FB950] hover:bg-[#3FB950]/20'
                           }
-                          hapticHeavy();
-                          compile();
-                          if (programError) return;
-                          const lines = [
-                            'WRITING SECTOR 0xAF…',
-                            'VERIFYING CHECKSUM…',
-                            'LATCHING RELAYS…',
-                            'ARMING OGAS HANDSHAKE…',
-                          ];
-                          let step = 0;
-                          if (burnTimerRef.current != null) window.clearInterval(burnTimerRef.current);
-                          setEepromBurn({ progress: 0, line: lines[0] });
-                          burnTimerRef.current = window.setInterval(() => {
-                            step += 1;
-                            const progress = Math.min(1, step / 26);
-                            setEepromBurn({
-                              progress,
-                              line: lines[Math.min(lines.length - 1, Math.floor(progress * lines.length))],
-                            });
-                            if (progress >= 1 && burnTimerRef.current != null) {
-                              window.clearInterval(burnTimerRef.current);
-                              burnTimerRef.current = null;
-                              setEepromBurn(null);
-                              addLog('LOGIC_IMAGE_BURNED', 'var(--green)');
-                              resetDirectiveRunProgress();
-                              setZoom(0.8);
-                              isPlayingRef.current = true;
-                              setIsPlaying(true);
-                              setMobileScreen('metrics');
-                              setMobileSplitHeight(mobileMinSplitPct);
-                            }
-                          }, 65);
-                        }}
-                        className="relative z-[1] w-full text-[14px] bg-[#3FB950]/10 py-3 font-bold uppercase tracking-[0.2em] shadow-[inset_0_0_20px_rgba(63,185,80,0.1)] transition-colors disabled:cursor-not-allowed disabled:opacity-40 border-y-2 border-[#3FB950] text-[#3FB950] hover:bg-[#3FB950]/20"
-                      >
-                        [ VALIDATION & BURN ]
-                      </button>
-                    </div>
-                    {eepromBurn && (
-                      <div className="rounded border border-[#58A6FF]/40 bg-black/60 px-2 py-2 font-mono text-[9px] text-[#8B949E]">
-                        <div className="mb-1 text-[#58A6FF]">{eepromBurn.line}</div>
-                        <div className="h-2 w-full overflow-hidden rounded-sm bg-[#21262d]">
-                          <div
-                            className="h-full bg-[#58A6FF] transition-[width] duration-75"
-                            style={{ width: `${Math.round(eepromBurn.progress * 100)}%` }}
-                          />
-                        </div>
+                        >
+                          {logicImageValidated ? '[ RUN ]' : '[ VALIDATION ]'}
+                        </button>
                       </div>
-                    )}
+                      {eepromBurn && (
+                        <div className="rounded border border-[#58A6FF]/40 bg-black/60 px-2 py-2 font-mono text-[9px] text-[#8B949E]">
+                          <div className="mb-1 text-[#58A6FF]">{eepromBurn.line}</div>
+                          <div className="h-2 w-full overflow-hidden rounded-sm bg-[#21262d]">
+                            <div
+                              className="h-full bg-[#58A6FF] transition-[width] duration-75"
+                              style={{ width: `${Math.round(eepromBurn.progress * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -374,22 +557,35 @@ export default function App() {
                 {!atMobileBottomMin && (
                   <div className="flex-1 min-h-0 relative bg-[#0D0F12]">
                     <div className="p-3 flex flex-col gap-4 overflow-y-auto scrollbar-hide h-full">
-                      <CollapsibleSection id="flow" title="TRAFFIC RATES" isCollapsed={collapsed.flow} onToggle={toggleCollapsed}>
-                        <TrafficFlowRates 
-                          rates={trafficRates} 
-                          isSandbox={currentLevel?.isSandbox} 
-                          onRateChange={(dir, val) => setTrafficRates(prev => ({ ...prev, [dir]: val }))} 
-                        />
-                      </CollapsibleSection>
-                      <CollapsibleSection id="queue" title="OSCILLOSCOPE — APPROACH LOAD" isCollapsed={collapsed.queue} onToggle={toggleCollapsed}>
-                        <QueueChart history={queueHistory} />
-                      </CollapsibleSection>
-                      <CollapsibleSection id="analytics" title="OSCILLOSCOPE — PHASE TIMING" isCollapsed={collapsed.analytics} onToggle={toggleCollapsed}>
-                        <AnalyticalChart history={timingHistory} />
-                      </CollapsibleSection>
-                      <CollapsibleSection id="log" title="PHASE LOG" isCollapsed={collapsed.log} onToggle={toggleCollapsed}>
-                        <PhaseLogList logs={logs} maxHeightClass="max-h-36" />
-                      </CollapsibleSection>
+                      <div className="flex justify-center mb-2">
+                        <button
+                          onClick={() => setShowDiagnostics(!showDiagnostics)}
+                          className="w-full py-2 bg-[#1A1D23] border-2 border-[#2D333B] text-[#C9D1D9] font-mono text-[10px] font-bold uppercase tracking-widest rounded-sm hover:border-[#58A6FF]/50 transition-colors"
+                        >
+                          {showDiagnostics ? '[ HIDE DIAGNOSTICS ]' : '[ SHOW DIAGNOSTICS ]'}
+                        </button>
+                      </div>
+                      
+                      {showDiagnostics && (
+                        <>
+                          <CollapsibleSection id="flow" title="TRAFFIC RATES" isCollapsed={collapsed.flow} onToggle={toggleCollapsed}>
+                            <TrafficFlowRates 
+                              rates={trafficRates} 
+                              isSandbox={currentLevel?.isSandbox} 
+                              onRateChange={(dir, val) => setTrafficRates(prev => ({ ...prev, [dir]: val }))} 
+                            />
+                          </CollapsibleSection>
+                          <CollapsibleSection id="queue" title="OSCILLOSCOPE — APPROACH LOAD" isCollapsed={collapsed.queue} onToggle={toggleCollapsed}>
+                            <QueueChart history={queueHistory} />
+                          </CollapsibleSection>
+                          <CollapsibleSection id="analytics" title="OSCILLOSCOPE — PHASE TIMING" isCollapsed={collapsed.analytics} onToggle={toggleCollapsed}>
+                            <AnalyticalChart history={timingHistory} />
+                          </CollapsibleSection>
+                          <CollapsibleSection id="log" title="PHASE LOG" isCollapsed={collapsed.log} onToggle={toggleCollapsed}>
+                            <PhaseLogList logs={logs} maxHeightClass="max-h-36" />
+                          </CollapsibleSection>
+                        </>
+                      )}
                       <div className="h-4 shrink-0" />
                     </div>
                   </div>
@@ -409,9 +605,6 @@ export default function App() {
           {crashInfo && (
             <CrashModal
               info={crashInfo}
-              incidentTape={incidentTape}
-              incidentPlaybackIndex={incidentPlaybackIndex}
-              onIncidentPlaybackIndex={setIncidentPlaybackIndex}
               onResetAndEdit={() => {
                 resetSimulation('MANUAL');
                 setMobileScreen('logic');
@@ -422,6 +615,7 @@ export default function App() {
             <LevelCompleteModal 
               info={levelCompleteInfo}
               levelId={activeLevelId}
+              levelOrdinal={level1Briefing.findIndex(l => l.id === activeLevelId) + 1}
               isLastLevel={!(level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0]).nextLevelId}
               onNext={() => {
                 setIsOptimizing(false);
@@ -463,6 +657,13 @@ export default function App() {
           ))}
         </AnimatePresence>
       </div>
+      {laneProbePanel}
+      {mobileScreen === 'logic' && pipLaneId && (
+        <LaneMinimapPip
+          highlightLaneId={pipLaneId}
+          closedLanes={(level1Briefing.find((l) => l.id === activeLevelId) || level1Briefing[0]).closedLanes}
+        />
+      )}
       <ManualOverlay
         isOpen={isManualOpen}
         onClose={() => {
@@ -701,16 +902,33 @@ export default function App() {
               helpTab={manualHelpTabForCompilerMessage(programError)}
               onOpenManualHelp={(tab) => openManual(tab)}
             />
-            <IndustrialPanelKey
-              onClick={() => {
-                  compile();
-                  addLog('LOGIC_IMAGE_BURNED', 'var(--green)');
-                  setIsEditMode(false);
-              }}
-              className="w-full py-2 text-[11px] text-[#3FB950] border-[#3FB950]/50 bg-[#3FB950]/12 hover:bg-[#3FB950]/24"
-            >
-              COMMIT EEPROM BURN
-            </IndustrialPanelKey>
+            {isEditMode && (
+              <div className="flex flex-col gap-2">
+                {logicValidating && (
+                  <div className="flex items-center justify-center gap-2 rounded border border-[#D29922]/50 bg-black/60 px-2 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wide text-[#D29922]">
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                    <span>Validating logic image…</span>
+                  </div>
+                )}
+                {!logicImageValidated ? (
+                  <IndustrialPanelKey
+                    disabled={procurementLocked || logicValidating}
+                    onClick={startLogicValidation}
+                    className="w-full py-2 text-[11px] text-[#3FB950] border-[#3FB950]/50 bg-[#3FB950]/12 hover:bg-[#3FB950]/24"
+                  >
+                    [ VALIDATION ]
+                  </IndustrialPanelKey>
+                ) : (
+                  <IndustrialPanelKey
+                    disabled={procurementLocked || logicValidating}
+                    onClick={startDesktopBurnRun}
+                    className="w-full py-2 text-[11px] text-[#58A6FF] border-[#58A6FF]/50 bg-[#58A6FF]/12 hover:bg-[#58A6FF]/24"
+                  >
+                    [ RUN ]
+                  </IndustrialPanelKey>
+                )}
+              </div>
+            )}
           </div>
         </CollapsibleSection>
 
@@ -905,9 +1123,6 @@ export default function App() {
           {crashInfo && (
             <CrashModal
               info={crashInfo}
-              incidentTape={incidentTape}
-              incidentPlaybackIndex={incidentPlaybackIndex}
-              onIncidentPlaybackIndex={setIncidentPlaybackIndex}
               onResetAndEdit={() => {
                 resetSimulation('MANUAL');
               }}
@@ -917,6 +1132,7 @@ export default function App() {
             <LevelCompleteModal 
               info={levelCompleteInfo}
               levelId={activeLevelId}
+              levelOrdinal={level1Briefing.findIndex(l => l.id === activeLevelId) + 1}
               isLastLevel={!(level1Briefing.find(l => l.id === activeLevelId) || level1Briefing[0]).nextLevelId}
               onNext={() => {
                 setIsOptimizing(false);
@@ -937,6 +1153,7 @@ export default function App() {
             />
           )}
         </AnimatePresence>
+        {laneProbePanel}
         <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 pointer-events-none items-center">
           <AnimatePresence>
             {toasts.map(toast => (

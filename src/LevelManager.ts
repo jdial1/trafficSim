@@ -8,6 +8,17 @@ export class LevelManager {
     this.level = level;
   }
 
+  public static displayTitle(level: BriefingContent): string {
+    if (level.isSandbox) return `SVE: ${level.title}`;
+    return `Req ${level.id}: ${level.title}`;
+  }
+
+  public static isApproachFullyClosed(closedLanes: string[] | undefined, direction: 'N' | 'S' | 'E' | 'W'): boolean {
+    if (!closedLanes?.length) return false;
+    const dirPrefix = direction.toLowerCase() + 'b-';
+    return (['left', 'thru', 'right'] as const).every((type) => closedLanes.includes(`${dirPrefix}${type}`));
+  }
+
   // Returns all lanes that are active (not closed) in the current level
   public getActiveLanes(): Lane[] {
     if (!this.level.closedLanes) return LANES;
@@ -21,11 +32,7 @@ export class LevelManager {
 
   // Returns true if an entire direction is closed
   public isDirectionClosed(direction: 'N' | 'S' | 'E' | 'W'): boolean {
-    if (!this.level.closedLanes) return false;
-    const dirPrefix = direction.toLowerCase() + 'b-';
-    return ['left', 'thru', 'right'].every(type => 
-      this.level.closedLanes!.includes(`${dirPrefix}${type}`)
-    );
+    return LevelManager.isApproachFullyClosed(this.level.closedLanes, direction);
   }
 
   // Which directions are valid for the "Movement Builder" UI

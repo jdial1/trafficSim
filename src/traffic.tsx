@@ -2,6 +2,8 @@ import React from 'react';
 import { Activity, ArrowUp, CornerUpLeft, CornerUpRight } from 'lucide-react';
 import { BRAND } from './branding';
 import { Movement } from './types';
+import type { Phase } from './interpreter';
+import { LANE_MAP } from './constants';
 
 export const VIEWPORT_MOBILE_MAX_WIDTH = 767;
 export const narrowViewport = () => typeof window !== 'undefined' && window.matchMedia(`(max-width: ${VIEWPORT_MOBILE_MAX_WIDTH}px)`).matches;
@@ -33,6 +35,42 @@ export const getMovementIcon = (m: Movement, size = 14) => {
 export const formatActiveMovements = (m: Movement[]) => m.length ? m.map(x => MovementLabels[x] || x).join('\n') : 'NONE';
 export const TIME_SCALE_OPTIONS = [1, 2, 5, 10] as const;
 export type TimeScale = (typeof TIME_SCALE_OPTIONS)[number];
+
+export function laneIdFromMovementTriple(source: string, movement: string): string | null {
+  const p =
+    source === 'NORTH' ? 'nb' : source === 'SOUTH' ? 'sb' : source === 'EAST' ? 'eb' : source === 'WEST' ? 'wb' : '';
+  if (!p) return null;
+  const seg =
+    movement === 'LEFT' ? 'left' : movement === 'STRAIGHT' ? 'thru' : movement === 'RIGHT' ? 'right' : '';
+  if (!seg) return null;
+  const id = `${p}-${seg}`;
+  return LANE_MAP.has(id) ? id : null;
+}
+
+export function phaseIndicesWithGoForLane(laneId: string, phases: Phase[]): number[] {
+  const lane = LANE_MAP.get(laneId);
+  if (!lane) return [];
+  const m = lane.movement;
+  const out: number[] = [];
+  for (let i = 0; i < phases.length; i++) {
+    if (phases[i].commands.some((c) => c.target === m && c.action === 'GO')) out.push(i + 1);
+  }
+  return out;
+}
+
+export function firstProgramLineForLaneToken(programCode: string, laneId: string): number | null {
+  const lane = LANE_MAP.get(laneId);
+  if (!lane) return null;
+  const label = MovementLabels[lane.movement];
+  if (!label || label.startsWith('CROSSWALK')) return null;
+  const lines = programCode.split('\n');
+  const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`\\b${esc}\\.(GO|STOP|YIELD)`, 'i');
+  for (let i = 0; i < lines.length; i++) {
+    if (re.test(lines[i])) return i + 1;
+  }
+  return null;
+}
 
 // Haptics & Audio
 export const vibrate = (p: number | number[]) => {

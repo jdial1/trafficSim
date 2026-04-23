@@ -6,13 +6,40 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, CheckCircle2, AlertTriangle, RefreshCw, Trophy, Download, ChevronLeft, ChevronRight, ChevronDown, Copy, BookOpen } from 'lucide-react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { BriefingContent } from './types';
-import { BriefingParser } from './BriefingParser';
+import { LevelManager } from './LevelManager';
+import { BriefingParser, hasNonDefaultTrafficWeights, trafficRatesFromBriefing } from './BriefingParser';
 import { useGlobalState } from './GlobalStateContext';
 import { supabase } from './lib/supabase';
 import { MANUAL_APPENDIX, type AppendixBlock } from './manualAppendix';
 import { segmentManualText, type ManualRichSegment } from './manualKeywordGlossary';
 
 const ManualNavContext = React.createContext<{ jumpToTab: (tab: string) => void } | null>(null);
+
+const BRIEFING_BULLET_TAG: Record<string, { tag: string; marker: string }> = {
+  '[GOAL]': { tag: 'text-[#3FB950]', marker: '[&::marker]:text-[#3FB950]' },
+  '[HAZARD]': { tag: 'text-[#F85149]', marker: '[&::marker]:text-[#F85149]' },
+  '[RESTRICTION]': { tag: 'text-[#D29922]', marker: '[&::marker]:text-[#D29922]' },
+  '[RULE]': { tag: 'text-[#58A6FF]', marker: '[&::marker]:text-[#58A6FF]' },
+  '[MODE]': { tag: 'text-[#A371F7]', marker: '[&::marker]:text-[#A371F7]' },
+  '[TRAFFIC ALERT]': { tag: 'text-[#FFA657]', marker: '[&::marker]:text-[#FFA657]' },
+};
+
+const briefingBulletLineClasses = (text: string) => {
+  const m = /^(\[[^\]]+\])/.exec(text.trim());
+  const key = m?.[1] ?? '';
+  return BRIEFING_BULLET_TAG[key] ?? { tag: 'text-[#8B949E]', marker: '[&::marker]:text-[#8B949E]' };
+};
+
+const BriefingBulletLine = ({ text, lineClasses }: { text: string; lineClasses: { tag: string; marker: string } }) => {
+  const m = /^(\[[^\]]+\])\s*(.*)$/.exec(text.trim());
+  if (!m) return <span className="text-[#C9D1D9]">{text}</span>;
+  return (
+    <>
+      <span className={`font-bold ${lineClasses.tag}`}>{m[1]}</span>
+      <span className="text-[#C9D1D9]"> {m[2]}</span>
+    </>
+  );
+};
 
 const manualAppendixTabDisplay = (tab: string, allTabs: string[]) => {
   const m = /^(\d+)-(.+)$/.exec(tab);
@@ -264,6 +291,12 @@ const ManualRichText = ({ text, className, variant = 'body' }: { text: string; c
     <span className={`${className ?? ''} ${isHeading ? 'uppercase' : ''}`.trim()}>
       {segs.map((s: ManualRichSegment, idx: number) => {
         if (s.kind === 'plain') return <span key={idx}>{s.text}</span>;
+        if (s.kind === 'bold')
+          return (
+            <strong key={idx} className="font-bold text-[#5c3e1a]">
+              {s.text}
+            </strong>
+          );
         if (s.kind === 'scribble')
           return (
             <span
@@ -663,11 +696,15 @@ const readDocketFatal = (levelId: string) => {
 
 export const LevelSelect = ({ levels, activeLevelId, unlockedLevels = [], onSelectLevel }: { levels: BriefingContent[]; activeLevelId: string; unlockedLevels?: string[]; onSelectLevel: (id: string) => void; }) => {
   const { highscores } = useGlobalState();
-  const [completedCollapsed, setCompletedCollapsed] = useState(false);
+  const [completedCollapsed, setCompletedCollapsed] = useState(true);
   const visibleLevels = levels.filter((l, i) => unlockedLevels.includes(l.id) || i === 0);
   const openLevels = visibleLevels.filter((l) => !highscores[l.id]);
   const completedLevels = visibleLevels.filter((l) => Boolean(highscores[l.id]));
   const rawActiveLevel = levels.find(l => l.id === activeLevelId) ?? levels[0];
+  const directiveTrafficPreview = useMemo(() => {
+    if (!hasNonDefaultTrafficWeights(rawActiveLevel)) return null;
+    return trafficRatesFromBriefing(rawActiveLevel);
+  }, [rawActiveLevel]);
   const activeIdx = levels.findIndex(l => l.id === rawActiveLevel.id);
   const isActiveUnlocked = unlockedLevels.includes(rawActiveLevel.id) || activeIdx === 0;
   const score = highscores[rawActiveLevel.id];
@@ -706,7 +743,7 @@ export const LevelSelect = ({ levels, activeLevelId, unlockedLevels = [], onSele
           >
             {l.id}
           </div>
-          <div className="mt-0.5 truncate text-[9px] text-[#8B949E]">{l.title}</div>
+          <div className="mt-0.5 truncate text-[9px] text-[#8B949E]">{LevelManager.displayTitle(l)}</div>
         </div>
         {completed && (
           <div
@@ -728,17 +765,11 @@ export const LevelSelect = ({ levels, activeLevelId, unlockedLevels = [], onSele
   return (
     <div className="flex flex-col h-full bg-[#141821] p-4 text-[#C9D1D9] font-mono overflow-y-auto scrollbar-hide">
       <div className="mb-3 truncate border-b border-[#2D333B] pb-2 text-[10px] font-bold uppercase tracking-wider text-[#8B949E]">
-        {rawActiveLevel.title}
+        {LevelManager.displayTitle(rawActiveLevel)}
       </div>
       <div className="mb-4 shrink-0 space-y-4">
-        {openLevels.length > 0 && (
-          <div>
-            <div className="mb-2 text-[9px] font-bold uppercase tracking-[0.2em] text-[#d29922]">Open directives</div>
-            <div className="space-y-2">{openLevels.map((l) => renderDirectiveRow(l, 'open'))}</div>
-          </div>
-        )}
         {completedLevels.length > 0 && (
-          <div className={openLevels.length > 0 ? 'mt-1 border-t border-[#30363d] pt-3' : ''}>
+          <div className={openLevels.length > 0 ? 'border-b border-[#30363d] pb-3' : ''}>
             <button
               type="button"
               aria-expanded={!completedCollapsed}
@@ -761,6 +792,12 @@ export const LevelSelect = ({ levels, activeLevelId, unlockedLevels = [], onSele
             )}
           </div>
         )}
+        {openLevels.length > 0 && (
+          <div>
+            <div className="mb-2 text-[9px] font-bold uppercase tracking-[0.2em] text-[#d29922]">Open directives</div>
+            <div className="space-y-2">{openLevels.map((l) => renderDirectiveRow(l, 'open'))}</div>
+          </div>
+        )}
       </div>
       {isActiveUnlocked && activeLevel && (
         <div className="relative border-2 border-[#2D333B] bg-black/50 p-4 shadow-xl">
@@ -770,6 +807,16 @@ export const LevelSelect = ({ levels, activeLevelId, unlockedLevels = [], onSele
             </div>
           ) : (
             <div className="absolute top-0 right-0 bg-[#F85149] px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-black">Confidential</div>
+          )}
+          {activeLevel.quickRef && (
+            <div className="mb-3 flex items-start gap-3 bg-[#e8d4a8] p-3 shadow-md rotate-[-1deg] text-[#3d3a36]">
+              <div className="font-sans text-[15px] font-medium leading-snug italic w-full">
+                "{activeLevel.quickRef.body}"
+                {activeLevel.quickRef.attribution && (
+                  <span className="block mt-1 text-right text-[12px] font-bold">— {activeLevel.quickRef.attribution}</span>
+                )}
+              </div>
+            </div>
           )}
           {activeLevel.bureauMemo && (
             <div className="mb-3 border border-[#d29922]/35 bg-[#d29922]/10 p-2 text-[10px] leading-snug text-[#e3c78a]">
@@ -783,8 +830,54 @@ export const LevelSelect = ({ levels, activeLevelId, unlockedLevels = [], onSele
           <div className="text-xs text-[#8B949E] mb-3 border-b border-[#2D333B] pb-3 uppercase">
             Subject: <span className="text-[#C9D1D9]">{activeLevel.subject}</span>
           </div>
+          {directiveTrafficPreview &&
+            (() => {
+              const r = directiveTrafficPreview;
+              const total = r.N + r.S + r.E + r.W;
+              const mixPcts = (['N', 'S', 'E', 'W'] as const).map((d) => (total > 0 ? (r[d] / total) * 100 : 0));
+              const maxMix = Math.max(...mixPcts, 0);
+              const flatBlend =
+                maxMix > 0 && mixPcts.every((p) => Math.round(p) === Math.round(mixPcts[0] ?? 0));
+              const mixTone = (mixPct: number) => {
+                if (mixPct <= 0) return 'text-[#6e7681]';
+                if (flatBlend) return 'text-[#79c0ff]';
+                const t = maxMix > 0 ? mixPct / maxMix : 0;
+                if (t >= 0.995) return 'text-[#D29922]';
+                if (t >= 0.67) return 'text-[#FFA657]';
+                if (t >= 0.34) return 'text-[#79c0ff]';
+                return 'text-[#58A6FF]';
+              };
+              return (
+                <div className="mb-3 flex gap-1">
+                  {(['NORTH', 'SOUTH', 'EAST', 'WEST'] as const).map((label, i) => {
+                    const mixPct = mixPcts[i] ?? 0;
+                    return (
+                      <div key={label} className="min-w-0 flex-1 rounded border border-[#2D333B] bg-black/20 px-1 py-1 text-center">
+                        <div className="text-[8px] leading-tight text-[#C9D1D9]/70">{label}</div>
+                        <div
+                          className={`font-mono text-[11px] tabular-nums leading-tight ${mixTone(mixPct)}${
+                            mixPct <= 0 ? ' line-through' : ''
+                          }`}
+                        >
+                          {mixPct.toFixed(0)}%
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           <div className="text-[13px] leading-relaxed whitespace-pre-wrap">{activeLevel.body}</div>
-          <ul className="mt-4 space-y-2 list-disc pl-5 text-[12px] text-[#3FB950]">{activeLevel.bullets.map((b, i) => (<li key={i}><span className="text-[#C9D1D9]">{b}</span></li>))}</ul>
+          <ul className="mt-4 space-y-2 list-disc pl-5 text-[12px] text-[#C9D1D9]">
+            {activeLevel.bullets.map((b, i) => {
+              const line = briefingBulletLineClasses(b);
+              return (
+                <li key={i} className={line.marker}>
+                  <BriefingBulletLine text={b} lineClasses={line} />
+                </li>
+              );
+            })}
+          </ul>
           {score && (
             <div className="mt-6 pt-4 border-t-2 border-[#2D333B] border-dashed space-y-3">
               <Histogram
@@ -935,6 +1028,57 @@ export const GameIntro = ({
     </div>
   );
 };
+
+const LANE_PIP_SEGMENTS: { id: string; cx: number; cy: number; w: number; h: number }[] = [
+  { id: 'nb-left', cx: 38, cy: 12, w: 8, h: 5 },
+  { id: 'nb-thru', cx: 50, cy: 12, w: 8, h: 5 },
+  { id: 'nb-right', cx: 62, cy: 12, w: 8, h: 5 },
+  { id: 'sb-left', cx: 38, cy: 88, w: 8, h: 5 },
+  { id: 'sb-thru', cx: 50, cy: 88, w: 8, h: 5 },
+  { id: 'sb-right', cx: 62, cy: 88, w: 8, h: 5 },
+  { id: 'eb-left', cx: 88, cy: 38, w: 5, h: 8 },
+  { id: 'eb-thru', cx: 88, cy: 50, w: 5, h: 8 },
+  { id: 'eb-right', cx: 88, cy: 62, w: 5, h: 8 },
+  { id: 'wb-left', cx: 12, cy: 38, w: 5, h: 8 },
+  { id: 'wb-thru', cx: 12, cy: 50, w: 5, h: 8 },
+  { id: 'wb-right', cx: 12, cy: 62, w: 5, h: 8 },
+];
+
+export const LaneMinimapPip = ({
+  highlightLaneId,
+  closedLanes = [],
+}: {
+  highlightLaneId: string | null;
+  closedLanes?: string[];
+}) => (
+  <div className="pointer-events-none fixed bottom-24 right-3 z-30 w-[104px] rounded border border-[#3FB950]/40 bg-[#0D0F12]/88 p-1.5 shadow-[0_0_24px_rgba(0,0,0,0.5)] backdrop-blur-[3px] sm:bottom-8 sm:right-4">
+    <div className="text-[7px] font-mono font-bold uppercase tracking-widest text-[#3FB950]/90 text-center mb-0.5">
+      Conflict plane
+    </div>
+    <svg viewBox="0 0 100 100" className="w-full aspect-square" aria-hidden>
+      <rect x="35" y="35" width="30" height="30" fill="rgba(22,27,34,0.95)" stroke="rgba(63,185,80,0.25)" strokeWidth="0.8" />
+      {LANE_PIP_SEGMENTS.map((s) => {
+        const closed = closedLanes.includes(s.id);
+        const hi = highlightLaneId === s.id;
+        const fill = closed ? 'rgba(48,54,64,0.35)' : hi ? 'rgba(63,185,80,0.88)' : 'rgba(88,166,255,0.18)';
+        const stroke = hi ? '#58ffb0' : 'rgba(45,51,59,0.75)';
+        return (
+          <rect
+            key={s.id}
+            x={s.cx - s.w / 2}
+            y={s.cy - s.h / 2}
+            width={s.w}
+            height={s.h}
+            rx="1.2"
+            fill={fill}
+            stroke={stroke}
+            strokeWidth={hi ? 1.25 : 0.45}
+          />
+        );
+      })}
+    </svg>
+  </div>
+);
 
 export const FirmwareUpdatePrompt = () => {
   const { offlineReady: [or, setOr], needRefresh: [nr, setNr], updateServiceWorker } = useRegisterSW({});

@@ -28,6 +28,7 @@ export interface ParseResult {
   phases: Phase[];
   rules?: ConditionalRule[];
   error?: string;
+  errorLine1Based?: number;
 }
 
 export interface HardwareConstraints {
@@ -94,6 +95,7 @@ export function parseTrafficProgram(code: string, constraints?: HardwareConstrai
       return {
         phases: [],
         error: `${memAddr(i + 1)}: PANEL_REGISTER_CONFLICT — green dwell is set on the front-panel timing bank, not in the logic image.`,
+        errorLine1Based: i + 1
       };
     }
 
@@ -105,7 +107,7 @@ export function parseTrafficProgram(code: string, constraints?: HardwareConstrai
       if (dirMap[dir] && turnMap[turn]) {
         currentRuleCondition = { targetLaneId: `${dirMap[dir]}-${turnMap[turn]}`, threshold: parseInt(ifMatch[2], 10) };
       } else {
-        return { phases: [], error: `${memAddr(i + 1)}: V-BUS_PARITY_ERROR — QUEUE.${ifMatch[1]} not strapped on ILC-92 comparator map.` };
+        return { phases: [], error: `${memAddr(i + 1)}: V-BUS_PARITY_ERROR — QUEUE.${ifMatch[1]} not strapped on ILC-92 comparator map.`, errorLine1Based: i + 1 };
       }
       continue;
     }
@@ -135,14 +137,14 @@ export function parseTrafficProgram(code: string, constraints?: HardwareConstrai
               continue;
             }
           }
-          return { phases: [], error: `${memAddr(i + 1)}: EEPROM_OPCODE_MISMATCH — ${act}` };
+          return { phases: [], error: `${memAddr(i + 1)}: EEPROM_OPCODE_MISMATCH — ${act}`, errorLine1Based: i + 1 };
         }
         rules.push({ ...currentRuleCondition, insertCommands });
         currentRuleCondition = null;
         continue;
       }
       // If we had a condition but the next line isn't phase_insert, it's a syntax error
-      return { phases: [], error: `${memAddr(i + 1)}: PATCH_PAYLOAD_MISSING — comparator arm requires phase_insert relay burst.` };
+      return { phases: [], error: `${memAddr(i + 1)}: PATCH_PAYLOAD_MISSING — comparator arm requires phase_insert relay burst.`, errorLine1Based: i + 1 };
     }
 
     if (line === 'EXCLUSIVE_PEDESTRIAN_PHASE.GO') {
@@ -183,7 +185,7 @@ export function parseTrafficProgram(code: string, constraints?: HardwareConstrai
     }
 
     if (!foundKeyword && !phaseMatch) {
-      return { phases: [], error: `${memAddr(i + 1)}: UNRECOGNIZED_INST — ${lines[i].trim()}` };
+      return { phases: [], error: `${memAddr(i + 1)}: UNRECOGNIZED_INST — ${lines[i].trim()}`, errorLine1Based: i + 1 };
     }
   }
 
@@ -203,4 +205,71 @@ export function parseTrafficProgram(code: string, constraints?: HardwareConstrai
   }
 
   return { phases, rules };
+}
+
+export interface EditorBurnValidationResult {
+  ok: boolean;
+  error?: string;
+  errorLine1Based?: number;
+}
+
+function phaseMovementCommandKey(trimmed: string): string | null {
+  const u = trimmed.toUpperCase();
+  if (u === 'EXCLUSIVE_PEDESTRIAN_PHASE.GO') return u;
+  if (/^(NORTH|SOUTH|EAST|WEST)_ALL\.(GO|YIELD)$/.test(u)) return u;
+  for (const k of Object.keys(KEYWORD_MAP)) {
+    const ku = k.toUpperCase();
+    if (u === `${ku}.GO` || u === `${ku}.YIELD`) return u;
+  }
+  return null;
+}
+
+function duplicateMovementInPhaseBlocks(code: string): EditorBurnValidationResult | null {
+  const lines = code.split('\n');
+  let inPhaseBody = false;
+  const seen = new Set<string>();
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].split('#')[0].trim();
+    if (!trimmed) continue;
+    if (/^phase\s*\(/i.test(trimmed)) {
+      inPhaseBody = true;
+      seen.clear();
+      continue;
+    }
+    if (/^if\s*\(/i.test(trimmed)) {
+      inPhaseBody = false;
+      continue;
+    }
+    if (!inPhaseBody) continue;
+    const key = phaseMovementCommandKey(trimmed);
+    if (!key) continue;
+    if (seen.has(key)) {
+      return {
+        ok: false,
+        error: `${memAddr(i + 1)}: DUPLICATE_INST — repeated ${trimmed} in the same phase bank.`,
+        errorLine1Based: i + 1,
+      };
+    }
+    seen.add(key);
+  }
+  return null;
+}
+
+export function validateTrafficProgramForBurn(code: string, constraints?: HardwareConstraints): EditorBurnValidationResult {
+  const parsed = parseTrafficProgram(code, constraints);
+  if (parsed.error) {
+    return { ok: false, error: parsed.error, errorLine1Based: parsed.errorLine1Based };
+  }
+  for (const phase of parsed.phases) {
+    if (phase.commands.length === 0) {
+      return {
+        ok: false,
+        error: `${memAddr(phase.lineStart + 1)}: EMPTY_PHASE_BANK — ${phase.label} has no .GO/.YIELD outputs.`,
+        errorLine1Based: phase.lineStart + 1,
+      };
+    }
+  }
+  const dup = duplicateMovementInPhaseBlocks(code);
+  if (dup) return dup;
+  return { ok: true };
 }

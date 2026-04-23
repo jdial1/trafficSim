@@ -26,6 +26,7 @@ export interface BriefingContent {
   failureConditions?: {
     maxQueueLength?: number;
     maxHardwareCost?: number;
+    maxQueueByLaneId?: Record<string, number>;
   };
   instructionLimits?: {
     forbiddenKeywords?: string[];
@@ -35,6 +36,8 @@ export interface BriefingContent {
   nextLevelId?: string;
   isSandbox?: boolean;
   bureauMemo?: string;
+  quickRef?: { body: string; attribution?: string };
+  editorQuickRef?: { body: string; attribution?: string };
 }
 
 export enum Movement {
@@ -95,26 +98,8 @@ export interface Vehicle {
   spawnAtMs: number;
   brakeIntensity?: number;
   originDir: 'N' | 'S' | 'E' | 'W';
+  waitStress?: number;
 }
-
-export type IncidentVehicleSnap = Pick<
-  Vehicle,
-  | 'id'
-  | 'x'
-  | 'y'
-  | 'angle'
-  | 'vx'
-  | 'vy'
-  | 'laneId'
-  | 'length'
-  | 'width'
-  | 'vType'
-  | 'color'
-  | 'cruiseSpeed'
-  | 'originDir'
->;
-
-export type IncidentFrame = { vehicles: IncidentVehicleSnap[] };
 
 export interface Lane {
   id: string;

@@ -43,3 +43,10 @@ export const CTA = {
   LOGIN_GOOGLE: 'LOGIN WITH GOOGLE',
   SIGN_OUT: 'SIGN OUT',
 } as const;
+
+export const getMetricTier = (levelIndex: number) => {
+  const ordinal = levelIndex + 1;
+  if (ordinal <= 3) return 1; // 1A, 1B, 1C
+  if (ordinal <= 6) return 2; // 1D, 2A, 2B
+  return 3;
+};

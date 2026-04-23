@@ -105,6 +105,14 @@ export function detectCrash(vehicles: Vehicle[]): CrashInfo | null {
 export const renderVehicleSprite = (args: { ctx: CanvasRenderingContext2D, v: Vehicle, lane?: Lane, time: number, isStopped: boolean, isBraking: boolean, brakeIntensity: number }) => {
   const { ctx, v, isBraking } = args;
   let col = '#58A6FF'; if (v.vType === 'MOTORCYCLE') col = '#D29922'; else if (v.vType === 'TRUCK') col = '#3FB950'; else if (v.vType === 'BUS') col = '#F85149'; else if (v.vType === 'VIP') col = '#C9D1D9';
+  const stress = v.waitStress ?? 0;
+  if (stress > 0.04) {
+    const t = Math.max(0, Math.min(1, stress));
+    const r = Math.round(88 + (248 - 88) * t);
+    const g = Math.round(166 + (153 - 166) * t * 0.55);
+    const b = Math.round(255 + (73 - 255) * t * 0.7);
+    col = `rgb(${r},${g},${b})`;
+  }
   const speed = Math.hypot(v.vx, v.vy);
   if (speed > 0.1) {
     ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-speed * 15, 0); ctx.strokeStyle = col + '40'; ctx.lineWidth = v.width * 0.8; ctx.stroke();

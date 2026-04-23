@@ -1,13 +1,14 @@
 import React from 'react';
-import { BRAND, bureauEfficiencyAuditLabel, METRIC } from './branding';
+import { BRAND, bureauEfficiencyAuditLabel, METRIC, getMetricTier } from './branding';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronDown, ChevronRight, AlertTriangle, RotateCcw, Pause, Play, CircleHelp } from 'lucide-react';
-import { Vehicle, Movement, LogEntry, IncidentFrame } from './types';
+import { Vehicle, Movement, LogEntry } from './types';
 import { CrashInfo } from './IntersectionEngine';
 import { LANES, LANE_MAP } from './constants';
-import { formatTransitUnitTag, hapticHeavy, hapticTap, DIRECTIONS, getDirection, getMovementIcon, MovementLabels } from './traffic';
+import { formatTransitUnitTag, hapticHeavy, hapticError, hapticTap, DIRECTIONS, getDirection, getMovementIcon, MovementLabels } from './traffic';
 import { Histogram } from './CoreComponents';
 import { Phase, PhaseCommand } from './interpreter';
+import { translateCompilerError } from './manualAppendix';
 
 export const industrialKeyClass =
   'rounded-none border-2 border-b-[3px] border-[#2D333B] bg-[#161B22] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] font-mono font-bold uppercase tracking-wider transition-colors active:translate-y-px active:border-b-2 active:shadow-inner';
@@ -25,15 +26,9 @@ export const IndustrialPanelKey = ({
 export const CrashModal = ({
   info,
   onResetAndEdit,
-  incidentTape,
-  incidentPlaybackIndex,
-  onIncidentPlaybackIndex,
 }: {
   info: CrashInfo;
   onResetAndEdit: () => void;
-  incidentTape: IncidentFrame[] | null;
-  incidentPlaybackIndex: number;
-  onIncidentPlaybackIndex: (idx: number) => void;
 }) => {
   const isGridlock = info.type === 'OVERFLOW';
   const isOverheat = info.type === 'OVERHEAT';
@@ -41,22 +36,26 @@ export const CrashModal = ({
   const title = isGridlock ? 'GRIDLOCK_DETECTED' : isOverheat ? 'THERMAL_SHUNT_TRIP' : 'KINETIC_OVERLAP_EXCEPTION';
   const errorCode = isGridlock ? 'ERROR_0x94' : isOverheat ? 'ERROR_0xAF' : 'ERROR_0x82';
   const fatalLine = isGridlock
-    ? 'FATAL: APPROACH BUFFER SATURATION (0x94).'
+    ? 'FATAL: APPROACH GRIDLOCK SATURATION (0x94).'
     : isOverheat
     ? 'FATAL: RELAY THERMAL RUNAWAY (0xAF).'
     : 'FATAL: KINETIC OVERLAP (0x82).';
-  const mainHeading = isGridlock ? 'BUFFER SATURATION HALT' : isOverheat ? 'THERMAL SHUNT TRIP' : 'KINETIC OVERLAP LATCH';
+  const mainHeading = isGridlock ? 'GRIDLOCK SATURATION HALT' : isOverheat ? 'THERMAL SHUNT TRIP' : 'KINETIC OVERLAP LATCH';
   
+  const formatMovement = (laneId: string) => {
+    const lane = LANE_MAP.get(laneId);
+    return lane ? MovementLabels[lane.movement] : laneId;
+  };
+  const plainEnglishCollision = !isGridlock && !isOverheat && info.laneA && info.laneB ? `CRASH (0x82): ${formatMovement(info.laneA)} and ${formatMovement(info.laneB)} collided.` : '';
   const description = isGridlock 
-    ? 'Upstream approach buffers exceeded guard depth. CRITICAL_HALT asserted to prevent yard cascade.'
+    ? 'Upstream approach gridlock exceeded guard depth. CRITICAL_HALT asserted to prevent yard cascade.'
     : isOverheat
-    ? 'Programmed green sum exceeds OGAS synchronization envelope. Thermal shunt opened; lamp bus frozen.'
-    : `Units ${info.vehicleIds.map(formatTransitUnitTag).join(' & ')} co-registered in conflict plane at grid [${info.x.toFixed(0)}, ${info.y.toFixed(0)}]. Form 9 incident record queued.`;
-  const manualRef = 'Consult OGAS Manual 1.4 (tab FAULT) for trip class, FLASH-RED latch, annunciator horn, and clearance notes.';
+    ? 'Programmed green sum exceeds OGAS synchronization envelope. Thermal shunt opened; lamp bus frozen.\n\nREMEDIATION: Add a relay bank with + PHASE or phase(n):, move part of the .GO workload into that block, then shorten PHASE DURATION sliders until the green sum is inside the envelope.'
+    : `${plainEnglishCollision}\nUnits ${info.vehicleIds.map(formatTransitUnitTag).join(' & ')} co-registered in conflict plane at grid [${info.x.toFixed(0)}, ${info.y.toFixed(0)}]. Form 9 incident record queued.`;
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-[60] flex items-center justify-center bg-red-900/40 backdrop-blur-sm p-4">
-      <motion.div initial={{ scale: 0.94, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} className="w-full max-w-md rounded-none border-2 border-[#F85149] bg-[#0D0F12] shadow-[0_0_30px_rgba(248,81,73,0.15)] overflow-hidden font-mono">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-[60] flex items-end sm:items-center justify-center bg-red-900/10 sm:bg-red-900/40 backdrop-blur-[1px] sm:backdrop-blur-sm p-4 pointer-events-none">
+      <motion.div initial={{ scale: 0.94, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} className="w-full max-w-md rounded-none border-2 border-[#F85149] bg-[#0D0F12] shadow-[0_0_30px_rgba(248,81,73,0.15)] overflow-hidden font-mono pointer-events-auto mb-16 sm:mb-0">
         <div className="bg-[#F85149] text-black px-4 py-2 font-bold tracking-widest text-sm flex justify-between">
           <span>{title}</span>
           <span>{errorCode}</span>
@@ -68,9 +67,8 @@ export const CrashModal = ({
               </div>
               <div>
                   <h2 className="text-[#F85149] text-xl font-bold tracking-wider uppercase">{mainHeading}</h2>
-                  <p className="text-[#C9D1D9] text-[10px] leading-tight mt-1 font-bold tracking-wide">{fatalLine}</p>
-                  <p className="text-[#8B949E] text-[10px] leading-tight mt-1">{description}</p>
-                  <p className="text-[#8B949E] text-[10px] leading-tight mt-1.5 italic">{manualRef}</p>
+                  <p className="text-[#C9D1D9] text-[12px] leading-tight mt-1 font-bold tracking-wide">{fatalLine}</p>
+                  <p className="text-[#8B949E] text-[12px] leading-tight mt-1 whitespace-pre-line">{description}</p>
               </div>
           </div>
           
@@ -90,7 +88,7 @@ export const CrashModal = ({
 
               {isGridlock && info.laneCongestion && (
                 <div className="mt-4 pt-3 border-t border-[#2D333B]/50">
-                  <div className="text-[9px] text-[#8B949E] uppercase tracking-widest mb-2 font-bold">Buffer depth snapshot</div>
+                  <div className="text-[9px] text-[#8B949E] uppercase tracking-widest mb-2 font-bold">Gridlock depth snapshot</div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                     {Object.entries(info.laneCongestion)
                       .filter(([_, q]) => q > 0)
@@ -106,24 +104,6 @@ export const CrashModal = ({
                 </div>
               )}
           </div>
-
-          {incidentTape && incidentTape.length > 1 && (
-            <div className="mb-4 space-y-2">
-              <div className="text-[9px] font-bold uppercase tracking-widest text-[#8B949E]">Review incident (black box)</div>
-              <input
-                type="range"
-                min={0}
-                max={incidentTape.length - 1}
-                value={incidentPlaybackIndex}
-                onChange={(e) => onIncidentPlaybackIndex(parseInt(e.target.value, 10))}
-                className="w-full accent-[#F85149] h-2"
-              />
-              <div className="flex justify-between text-[9px] text-[#8B949E] font-mono">
-                <span>T-{Math.round((incidentTape.length - 1 - incidentPlaybackIndex) * 0.1)}s</span>
-                <span>FRAME {incidentPlaybackIndex + 1}/{incidentTape.length}</span>
-              </div>
-            </div>
-          )}
 
           <div className="flex flex-col gap-2">
               <IndustrialPanelKey onClick={onResetAndEdit} className="w-full border-[#F85149]/70 bg-[#F85149]/15 py-3 text-xs text-[#F85149] hover:bg-[#F85149]/25 flex items-center justify-center gap-2">
@@ -226,7 +206,27 @@ export const CollapsibleSection = React.memo(({ id, title, isCollapsed, onToggle
   </div>
 ));
 
-export const LevelCompleteModal = ({ info, levelId, isLastLevel, onNext, onRetry }: { info: { carsCleared: number; timeSeconds: number; cycleTime: number; linesOfCode: number; hardwareCost: number; }; levelId: string; isLastLevel?: boolean; onNext: () => void; onRetry: () => void; }) => (
+export const LevelCompleteModal = ({
+  info,
+  levelId,
+  levelOrdinal,
+  isLastLevel,
+  onNext,
+  onRetry,
+  showWatchReplay,
+  onWatchReplay,
+}: {
+  info: { carsCleared: number; timeSeconds: number; cycleTime: number; linesOfCode: number; hardwareCost: number };
+  levelId: string;
+  levelOrdinal: number;
+  isLastLevel?: boolean;
+  onNext: () => void;
+  onRetry: () => void;
+  showWatchReplay?: boolean;
+  onWatchReplay?: () => void;
+}) => {
+  const tier = getMetricTier(levelOrdinal - 1);
+  return (
   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
     <motion.div initial={{ scale: 0.94, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} className="w-full max-w-md rounded-none border-2 border-[#3FB950] bg-[#0D0F12] shadow-[0_0_30px_rgba(63,185,80,0.15)] overflow-hidden font-mono">
       <div className="bg-[#3FB950] text-[#0D0F12] px-4 py-2 font-bold tracking-widest text-sm flex justify-between">
@@ -235,43 +235,70 @@ export const LevelCompleteModal = ({ info, levelId, isLastLevel, onNext, onRetry
       </div>
       <div className="p-6">
         <h2 className="text-[#C9D1D9] text-xl font-bold mb-1 text-center tracking-wider">RESOURCE ALLOCATION REPORT</h2>
-        <p className="text-[#8B949E] text-[9px] text-center mb-1 font-mono uppercase tracking-wide">Discharge target satisfied. Safety certification: four consecutive refresh cycles with stable discharge register.</p>
-        <p className="text-[#8B949E] text-[8px] text-center mb-6 font-mono uppercase tracking-wide">Intermittent logic variance voids commendation; this filing passed settle gate.</p>
-        <div className="space-y-2">
-          <Histogram
-            title={METRIC.THROUGHPUT}
-            value={info.cycleTime}
-            unit="s"
-            color="#3FB950"
-            min={10}
-            max={120}
-            levelId={levelId}
-            dbColumn="seconds_to_clear"
-            distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
-          />
-          <Histogram
-            title={METRIC.INSTRUCTION_COUNT}
-            value={info.linesOfCode}
-            unit="SECT"
-            color="#58A6FF"
-            min={2}
-            max={30}
-            levelId={levelId}
-            dbColumn="instruction_count"
-            distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
-          />
-          <Histogram
-            title={METRIC.HARDWARE_COST}
-            value={info.hardwareCost}
-            unit="¥"
-            color="#D29922"
-            min={100}
-            max={2000}
-            levelId={levelId}
-            dbColumn="hardware_cost"
-            distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
-          />
-        </div>
+        <p className="text-[#8B949E] text-[11px] text-center mb-1 font-mono uppercase tracking-wide">Discharge target satisfied. Safety certification: four consecutive refresh cycles with stable discharge register.</p>
+        <p className="text-[#8B949E] text-[10px] text-center mb-6 font-mono uppercase tracking-wide">Intermittent logic variance voids commendation; this filing passed settle gate.</p>
+        
+        {tier > 1 ? (
+          <div className="space-y-2 mt-4 pt-4 border-t border-[#2D333B]">
+            <div className="text-[10px] text-[#3FB950] font-bold uppercase tracking-widest mb-3 text-center">Optimization Audit</div>
+            {tier >= 2 && (
+              <Histogram
+                title={METRIC.THROUGHPUT}
+                value={info.cycleTime}
+                unit="s"
+                color="#3FB950"
+                min={10}
+                max={120}
+                levelId={levelId}
+                dbColumn="seconds_to_clear"
+                distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
+              />
+            )}
+            {tier >= 3 && (
+              <>
+                <Histogram
+                  title={METRIC.INSTRUCTION_COUNT}
+                  value={info.linesOfCode}
+                  unit="SECT"
+                  color="#58A6FF"
+                  min={2}
+                  max={30}
+                  levelId={levelId}
+                  dbColumn="instruction_count"
+                  distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
+                />
+                <Histogram
+                  title={METRIC.HARDWARE_COST}
+                  value={info.hardwareCost}
+                  unit="¥"
+                  color="#D29922"
+                  min={100}
+                  max={2000}
+                  levelId={levelId}
+                  dbColumn="hardware_cost"
+                  distributionLabel={bureauEfficiencyAuditLabel(BRAND.SECTOR)}
+                />
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="mt-4 pt-4 border-t border-[#2D333B] text-center space-y-2">
+            <div className="text-[12px] text-[#3FB950] font-bold uppercase tracking-widest">SURVIVAL CONFIRMED</div>
+            <div className="text-[10px] text-[#8B949E] uppercase tracking-wide">Efficiency metrics offline for initial run. Focus on base clearance.</div>
+          </div>
+        )}
+
+        {showWatchReplay && onWatchReplay && (
+          <div className="mt-6">
+            <IndustrialPanelKey
+              onClick={onWatchReplay}
+              className="w-full border-[#58A6FF]/55 bg-[#58A6FF]/12 py-2.5 text-[11px] text-[#58A6FF] hover:bg-[#58A6FF]/22"
+            >
+              WATCH REPLAY (VISUAL)
+            </IndustrialPanelKey>
+          </div>
+        )}
+
         <div className="mt-8 flex gap-3">
           <IndustrialPanelKey onClick={onRetry} className="flex-1 border-[#2D333B] bg-black/30 py-2 text-[11px] text-[#C9D1D9] hover:border-[#58A6FF]/50 hover:text-white">
             AMEND FILING
@@ -286,7 +313,8 @@ export const LevelCompleteModal = ({ info, levelId, isLastLevel, onNext, onRetry
       </div>
     </motion.div>
   </motion.div>
-);
+  );
+};
 
 export const MasterSwitch = ({
   isOn,
@@ -372,17 +400,42 @@ export const ProgramCompileError = ({
   message,
   helpTab,
   onOpenManualHelp,
+  compact,
 }: {
   message: string;
   helpTab: string | null;
   onOpenManualHelp: (tab: string) => void;
+  compact?: boolean;
 }) => {
   if (!message) return null;
+  if (compact) {
+    return (
+      <div className="flex gap-1.5 items-center rounded border border-[#F85149]/35 bg-[#F85149]/10 px-2 py-1.5">
+        <div className="min-w-0 flex-1 text-[11px] font-mono font-bold leading-snug text-[#F85149]">
+          {translateCompilerError(message)}
+        </div>
+        {helpTab && (
+          <button
+            type="button"
+            title={`Open manual: ${helpTab}`}
+            onClick={() => {
+              hapticTap();
+              onOpenManualHelp(helpTab);
+            }}
+            className="shrink-0 rounded border border-[#F85149] p-1 text-[#F85149] hover:bg-[#F85149]/20"
+          >
+            <CircleHelp size={14} />
+          </button>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="flex gap-2 items-start rounded border border-[#F85149]/30 bg-[#F85149]/10 p-2">
       <div className="min-w-0 flex-1">
-        <div className="mb-1 text-[9px] font-mono font-bold uppercase tracking-wider text-[#F85149]/80">Logic image validation failure</div>
-        <div className="text-[11px] text-[#F85149] font-mono whitespace-pre-wrap leading-tight">{message}</div>
+        <div className="mb-1 text-[11px] font-mono font-bold uppercase tracking-wider text-[#F85149]/80">Logic image validation failure</div>
+        <div className="text-[13px] text-[#F85149] font-mono whitespace-pre-wrap leading-tight">{translateCompilerError(message)}</div>
+        <div className="text-[10px] text-[#8B949E] mt-2 font-mono whitespace-pre-wrap leading-tight">{message}</div>
       </div>
       {helpTab && (
         <button

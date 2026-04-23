@@ -1,11 +1,54 @@
-import React, { useEffect, useState } from 'react';
-import { motion, AnimatePresence, Reorder } from 'motion/react';
-import { ChevronDown, Trash2, GripVertical, Cpu } from 'lucide-react';
-import { hapticTap, hapticError } from './traffic';
+import React, { useEffect, useRef, useState } from 'react';
+import { motion, Reorder } from 'motion/react';
+import { Trash2, GripVertical } from 'lucide-react';
+import { LevelManager } from './LevelManager';
+import { hapticTap, laneIdFromMovementTriple, getMovementIcon } from './traffic';
+import { Movement } from './types';
+import { ProgramCompileError } from './UI';
 
 type Dir = 'NORTH' | 'SOUTH' | 'EAST' | 'WEST';
 const DIRS: Dir[] = ['NORTH', 'SOUTH', 'EAST', 'WEST'];
 const TURNS = ['_LEFT', '_STRAIGHT', '_RIGHT', '_ALL'] as const;
+const TURN_CHIP_ICON_PX = 22;
+
+const LANE_PREFIX: Record<Dir, string> = { NORTH: 'nb', SOUTH: 'sb', EAST: 'eb', WEST: 'wb' };
+
+function approachKey(d: Dir): 'N' | 'S' | 'E' | 'W' {
+  return d === 'NORTH' ? 'N' : d === 'SOUTH' ? 'S' : d === 'EAST' ? 'E' : 'W';
+}
+
+function isTurnClosedForDir(closedLanes: string[] | undefined, dir: Dir, turn: (typeof TURNS)[number]): boolean {
+  const p = LANE_PREFIX[dir];
+  if (turn === '_ALL') {
+    return Boolean(closedLanes?.includes(`${p}-left`) || closedLanes?.includes(`${p}-thru`) || closedLanes?.includes(`${p}-right`));
+  }
+  const lane = turn === '_LEFT' ? 'left' : turn === '_STRAIGHT' ? 'thru' : 'right';
+  return Boolean(closedLanes?.includes(`${p}-${lane}`));
+}
+
+function turnQuickIcon(t: (typeof TURNS)[number], size: number) {
+  if (t === '_ALL') {
+    return (
+      <span className="inline-flex items-center justify-center gap-0.5 leading-none [&_svg]:shrink-0">
+        {getMovementIcon(Movement.NORTHBOUND_LEFT, size)}
+        {getMovementIcon(Movement.NORTHBOUND_STRAIGHT, size)}
+        {getMovementIcon(Movement.NORTHBOUND_RIGHT, size)}
+      </span>
+    );
+  }
+  const m =
+    t === '_LEFT' ? Movement.NORTHBOUND_LEFT : t === '_STRAIGHT' ? Movement.NORTHBOUND_STRAIGHT : Movement.NORTHBOUND_RIGHT;
+  return getMovementIcon(m, size);
+}
+
+function movementLabelToTurnKey(movement: string): (typeof TURNS)[number] | null {
+  const u = movement.toUpperCase();
+  if (u === 'LEFT') return '_LEFT';
+  if (u === 'STRAIGHT') return '_STRAIGHT';
+  if (u === 'RIGHT') return '_RIGHT';
+  if (u === 'ALL') return '_ALL';
+  return null;
+}
 
 type Props = {
   programCode: string;
@@ -16,11 +59,21 @@ type Props = {
   closedLanes?: string[];
   isPlaying?: boolean;
   maxPhases?: number;
+  allowYield?: boolean;
+  highlightSourceLine?: number | null;
+  liteChrome?: boolean;
+  onMovementLaneFocus?: (laneId: string | null) => void;
+  compileError?: string;
+  compileErrorHelpTab?: string | null;
+  onOpenCompileErrorHelp: (tab: string) => void;
+  bomMeter?: React.ReactNode;
+  editorQuickRef?: { body: string; attribution?: string };
 };
 
 type LineData = { 
   id: string; 
-  text: string 
+  text: string;
+  sourceLine1Based?: number;
 };
 
 type BlockData = {
@@ -45,22 +98,12 @@ function parseMovementCommandLine(trimmed: string): MovementTriple | null {
   };
 }
 
-export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteLastLine, activePhaseIndex, closedLanes, isPlaying, maxPhases }: Props) {
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [composerPath, setComposerPath] = useState<'root' | 'movement_dir' | 'movement_turn' | 'movement_action' | 'cw_action' | 'if_dir' | 'if_turn' | 'if_gt' | 'insert_dir' | 'insert_turn' | 'insert_action'>('root');
-  const [builderBase, setBuilderBase] = useState('');
+export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteLastLine, activePhaseIndex, closedLanes, isPlaying, maxPhases, allowYield = true, highlightSourceLine, liteChrome = false, onMovementLaneFocus, compileError = '', compileErrorHelpTab = null, onOpenCompileErrorHelp, bomMeter, editorQuickRef }: Props) {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<BlockData[]>([]);
-
-  const closedDirections = new Set<string>();
-  if (closedLanes) {
-    closedLanes.forEach(laneId => {
-      if (laneId.startsWith('nb-')) closedDirections.add('NORTH');
-      if (laneId.startsWith('sb-')) closedDirections.add('SOUTH');
-      if (laneId.startsWith('eb-')) closedDirections.add('EAST');
-      if (laneId.startsWith('wb-')) closedDirections.add('WEST');
-    });
-  }
+  const [quickDir, setQuickDir] = useState<Dir | null>(null);
+  const [quickTurn, setQuickTurn] = useState<(typeof TURNS)[number] | null>(null);
 
   useEffect(() => {
     setBlocks((prevBlocks) => {
@@ -90,9 +133,9 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
           if (trimmed.startsWith('phase(')) {
             pIdx = phaseCounter++;
           }
-          currentBlock = { id: `block-${Math.random()}`, header: { id: `${i}-${Math.random()}`, text }, lines: [], phaseIndex: pIdx };
+          currentBlock = { id: `block-${Math.random()}`, header: { id: `${i}-${Math.random()}`, text, sourceLine1Based: i + 1 }, lines: [], phaseIndex: pIdx };
         } else {
-          currentBlock.lines.push({ id: `${i}-${Math.random()}`, text });
+          currentBlock.lines.push({ id: `${i}-${Math.random()}`, text, sourceLine1Based: i + 1 });
         }
       });
       if (currentBlock.header || currentBlock.lines.length > 0) {
@@ -145,17 +188,9 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
     setProgramCode(newCode);
   };
 
-  const openSheet = () => {
-    setComposerPath('root');
-    setBuilderBase('');
-    setSheetOpen(true);
-  };
-
-  const closeSheet = () => setSheetOpen(false);
-
   const phaseBlocksInOrder = blocks.filter(b => (b.header?.text.trim() ?? '').startsWith('phase('));
   const phaseSlotCount = phaseBlocksInOrder.length;
-  const rackFull = maxPhases != null && phaseSlotCount >= maxPhases;
+  const rackOverflow = maxPhases != null && phaseSlotCount > maxPhases;
   const hasPhaseBlocks = phaseBlocksInOrder.length > 0;
   const defaultPhaseBlockId = hasPhaseBlocks ? phaseBlocksInOrder[phaseBlocksInOrder.length - 1].id : null;
   const explicitPhaseSelection =
@@ -188,93 +223,7 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
         return t + (t ? '\n' : '') + chunk + '\n';
       });
     }
-    closeSheet();
   };
-
-  const handleRootChoice = (choice: 'phase' | 'movement' | 'condition' | 'pedestrian') => {
-    hapticTap();
-    if (choice === 'phase') {
-      if (maxPhases != null && (programCode.match(/phase\(/g) || []).length >= maxPhases) {
-        hapticError();
-        return;
-      }
-      if (selectedBlockId) {
-        const selectedIdx = blocks.findIndex(b => b.id === selectedBlockId);
-        if (selectedIdx !== -1) {
-          const nextPhaseNum = (programCode.match(/phase\(/g) || []).length + 1;
-          const newPhaseBlock: BlockData = {
-            id: `block-${Math.random()}`,
-            header: { id: `header-${Math.random()}`, text: `phase(${nextPhaseNum}):` },
-            lines: [],
-            phaseIndex: nextPhaseNum - 1
-          };
-          const newBlocks = [...blocks];
-          newBlocks.splice(selectedIdx + 1, 0, newPhaseBlock);
-          
-          const newCode = newBlocks.map(b => {
-            const parts = [];
-            if (b.header) parts.push(b.header.text);
-            b.lines.forEach(l => parts.push(l.text));
-            return parts.join('\n');
-          }).join('\n');
-          setProgramCode(newCode);
-          setSelectedBlockId(newPhaseBlock.id);
-        }
-      } else {
-        appendPhase();
-      }
-      closeSheet();
-    }
-    else if (choice === 'movement') {
-      if (!hasPhaseBlocks) return;
-      setComposerPath('movement_dir');
-    }
-    else if (choice === 'condition') setComposerPath('if_dir');
-    else if (choice === 'pedestrian') appendRaw('    EXCLUSIVE_PEDESTRIAN_PHASE.GO');
-  };
-
-  const handleDir = (dir: Dir | 'CROSSWALK') => {
-    hapticTap();
-    if (composerPath === 'movement_dir') {
-      setBuilderBase(dir === 'CROSSWALK' ? 'CROSSWALK_' : `${dir}`);
-      setComposerPath('movement_turn');
-    } else if (composerPath === 'if_dir') {
-      if (dir !== 'CROSSWALK') {
-        setBuilderBase(`if (QUEUE.${dir}`);
-        setComposerPath('if_turn');
-      }
-    } else if (composerPath === 'insert_dir') {
-      if (dir !== 'CROSSWALK') {
-        setBuilderBase(`${dir}`);
-        setComposerPath('insert_turn');
-      }
-    }
-  };
-
-  const handleTurn = (turn: string) => {
-    hapticTap();
-    if (composerPath === 'movement_turn') {
-      setBuilderBase(`${builderBase}${turn}`);
-      setComposerPath('movement_action');
-    } else if (composerPath === 'if_turn') {
-      setBuilderBase(`${builderBase}${turn} > 10):\n    phase_insert(`);
-      setComposerPath('insert_dir');
-    } else if (composerPath === 'insert_turn') {
-      setBuilderBase(`${builderBase}${builderBase.includes('QUEUE') ? '' : turn}`);
-      setComposerPath('insert_action');
-    }
-  };
-
-  const handleAction = (action: 'GO' | 'YIELD') => {
-    hapticTap();
-    if (composerPath === 'movement_action') appendRaw(`    ${builderBase}.${action}`);
-    else if (composerPath === 'insert_action') appendRaw(`${builderBase}.${action})`);
-  };
-
-  const keyBase = 'relative min-h-[48px] px-2 py-2 rounded-sm font-mono text-[12px] font-bold tracking-widest border-2 flex items-center justify-center overflow-hidden';
-  const keyNeutral = 'bg-[#2D333B] border-[#1A1D23] text-[#C9D1D9]';
-  const keyAction = 'bg-[#3FB950] border-[#238636] text-[#0D0F12]';
-  const keyDither = "after:content-[''] after:absolute after:inset-0 after:pointer-events-none after:bg-[linear-gradient(rgba(0,0,0,0.1)_50%,transparent_50%)] after:bg-[size:100%_2px]";
 
   const renderModule = (text: string, id: string, isHeader: boolean, block: BlockData, opts?: { groupedHeader?: boolean; groupedLine?: boolean }) => {
     const groupedHeader = Boolean(opts?.groupedHeader);
@@ -294,38 +243,59 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
     const trimmed = text.trim();
     const neutralSourceClass =
       'flex-1 min-w-0 flex items-center justify-center rounded border border-[#3d444d] bg-[#1a1f26] text-[#b1bac4] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate';
-    const neutralMovementClass =
-      'flex-1 min-w-0 flex items-center justify-center rounded border border-[#30363d] bg-[#161b22] text-[#8b949e] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate';
+    const neutralMovementShell =
+      'flex-1 min-w-0 flex items-center justify-center rounded border border-[#30363d] bg-[#161b22] text-[#8b949e] px-1 py-1.5';
+    const neutralMovementClass = `${neutralMovementShell} font-bold uppercase tracking-wide text-[10px] sm:text-[11px] truncate`;
 
     if (!isHeader) {
       const groupedLine = Boolean(opts?.groupedLine);
+      const isHighlighted = highlightSourceLine != null && block.lines.find(l => l.id === id)?.sourceLine1Based === highlightSourceLine;
       const triple = parseMovementCommandLine(trimmed);
       const rowShell = groupedLine
-        ? 'relative z-10 flex items-stretch bg-[#0d1117]'
-        : 'relative z-10 flex items-stretch border-2 border-[#2D333B] bg-[#161B22] rounded-md';
+        ? `relative z-10 flex items-stretch bg-[#0d1117] ${isHighlighted ? 'ring-2 ring-[#F85149] ring-inset' : ''}`
+        : `relative z-10 flex items-stretch border-2 ${isHighlighted ? 'border-[#F85149]' : 'border-[#2D333B]'} bg-[#161B22] rounded-md`;
       const innerPad = groupedLine ? 'py-2 pl-2 pr-1' : 'p-3';
       const tripleGap = groupedLine ? 'gap-1' : 'gap-1.5';
       const delBtnBorder = groupedLine ? 'border-l border-[#30363d]/55' : 'border-l-2 border-[#2D333B]';
       const srcCls = groupedLine
         ? 'flex-1 min-w-0 flex items-center justify-center rounded-sm bg-[#21262d] text-[#b1bac4] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1.5 py-1 truncate'
         : neutralSourceClass;
-      const movCls = groupedLine
-        ? 'flex-1 min-w-0 flex items-center justify-center rounded-sm bg-[#1c2128] text-[#8b949e] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1.5 py-1 truncate'
-        : neutralMovementClass;
+      const movShellGrouped =
+        'flex-1 min-w-0 flex items-center justify-center rounded-sm bg-[#1c2128] text-[#8b949e] px-1.5 py-1';
+      const movTextExtras = 'font-bold uppercase tracking-wide text-[10px] sm:text-[11px] truncate';
+      const movCls = groupedLine ? `${movShellGrouped} ${movTextExtras}` : neutralMovementClass;
+      const movClsIcon = groupedLine ? movShellGrouped : neutralMovementShell;
       const actClsGo = groupedLine
         ? 'flex-1 min-w-0 flex items-center justify-center rounded-sm bg-[#3FB950]/16 text-[#3FB950] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1.5 py-1 truncate'
         : 'flex-1 min-w-0 flex items-center justify-center rounded border border-[#3FB950]/50 bg-[#3FB950]/14 text-[#3FB950] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate';
       const actClsYield = groupedLine
         ? 'flex-1 min-w-0 flex items-center justify-center rounded-sm bg-[#D29922]/14 text-[#E3B341] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1.5 py-1 truncate'
         : 'flex-1 min-w-0 flex items-center justify-center rounded border border-[#D29922]/55 bg-[#D29922]/16 text-[#E3B341] font-bold uppercase tracking-wide text-[10px] sm:text-[11px] px-1 py-1.5 truncate';
+      const srcLine = block.lines.find((l) => l.id === id)?.sourceLine1Based;
+      const movementTurnKey = triple ? movementLabelToTurnKey(triple.movement) : null;
       return (
-        <div key={id} className={groupedLine ? 'relative' : 'relative mb-2 last:mb-0'}>
-          <div className={rowShell}>
+        <div key={id} className={groupedLine ? 'relative' : 'relative mb-2 last:mb-0'} data-source-line={srcLine}>
+          <div
+            className={rowShell}
+            role={triple && onMovementLaneFocus ? 'button' : undefined}
+            tabIndex={triple && onMovementLaneFocus ? 0 : undefined}
+            onClick={() => {
+              if (!triple || !onMovementLaneFocus) return;
+              hapticTap();
+              const lid = laneIdFromMovementTriple(triple.source, triple.movement);
+              onMovementLaneFocus(lid);
+            }}
+          >
             <div className={`font-mono text-[11px] sm:text-xs flex-1 flex items-center overflow-hidden min-w-0 ${innerPad}`}>
               {triple ? (
                 <div className={`flex flex-1 min-w-0 ${tripleGap} items-stretch`} title={trimmed}>
                   <span className={srcCls}>{triple.source}</span>
-                  <span className={movCls}>{triple.movement}</span>
+                  <span
+                    className={movementTurnKey ? `${movClsIcon} [&_svg]:shrink-0` : movCls}
+                    title={trimmed}
+                  >
+                    {movementTurnKey ? turnQuickIcon(movementTurnKey, TURN_CHIP_ICON_PX) : triple.movement}
+                  </span>
                   <span className={triple.action === 'GO' ? actClsGo : actClsYield}>{triple.action}</span>
                 </div>
               ) : (
@@ -351,6 +321,8 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
       );
     }
 
+    const isHighlightedHeader = isHeader && highlightSourceLine != null && block.header?.sourceLine1Based === highlightSourceLine;
+
     const headerMotionGrouped = groupedHeader
       ? `relative z-10 flex items-stretch border-0 border-b-2 ${
           isSelected
@@ -360,10 +332,10 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
             : isCondition
               ? 'border-b-[#D29922]/30'
               : 'border-b-[#3FB950]/25'
-        } bg-[#161B22] rounded-t-md rounded-b-none shadow-none ${isPhaseOrConditionHeader ? 'cursor-pointer' : ''}`
+        } bg-[#161B22] rounded-t-md rounded-b-none shadow-none ${isPhaseOrConditionHeader ? 'cursor-pointer' : ''} ${isHighlightedHeader ? 'ring-2 ring-[#F85149] ring-inset' : ''}`
       : '';
     const headerMotionStandalone = !groupedHeader
-      ? `relative z-10 flex items-stretch border-2 ${isSelected ? 'border-[#3FB950] shadow-[0_0_15px_rgba(63,185,80,0.4)]' : 'border-[#2D333B] shadow-[0_4px_0_rgba(26,29,35,1)]'} bg-[#161B22] rounded-md ${isPhaseOrConditionHeader ? 'cursor-pointer' : ''}`
+      ? `relative z-10 flex items-stretch border-2 ${isSelected ? 'border-[#3FB950] shadow-[0_0_15px_rgba(63,185,80,0.4)]' : 'border-[#2D333B] shadow-[0_4px_0_rgba(26,29,35,1)]'} bg-[#161B22] rounded-md ${isPhaseOrConditionHeader ? 'cursor-pointer' : ''} ${isHighlightedHeader ? 'border-[#F85149]' : ''}`
       : '';
     const railBorderGrouped = groupedHeader
       ? isSelected
@@ -433,60 +405,119 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
     );
   };
 
-  const patchBayStatusLine = (() => {
-    const fromPhaseHeader = (h: LineData) => h.text.trim().replace(/^phase/i, 'PHASE');
-    const primaryId = explicitPhaseSelection && selectedBlockId ? selectedBlockId : defaultPhaseBlockId;
-    if (primaryId) {
-      const b = blocks.find(x => x.id === primaryId);
-      if (b?.header?.text.trim().startsWith('phase(')) return fromPhaseHeader(b.header);
-    }
-    if (activePhaseIndex !== undefined) {
-      const active = blocks.find(
-        x => x.phaseIndex === activePhaseIndex && x.header?.text.trim().startsWith('phase(')
-      );
-      if (active?.header) return fromPhaseHeader(active.header);
-    }
-    return 'PATCH BAY ACTIVE';
-  })();
+  const rackPhaseEmptyHint =
+    Boolean(compileError) &&
+    compileError.toUpperCase().includes('LOGIC_IMAGE_EMPTY') &&
+    phaseSlotCount === 0;
+
+  const focusRackPhaseSlot = (slotIndex: number) => {
+    const target = phaseBlocksInOrder[slotIndex];
+    if (!target) return;
+    hapticTap();
+    setSelectedBlockId(target.id);
+    const id = target.id;
+    requestAnimationFrame(() => {
+      scrollRef.current?.querySelector(`[data-rack-phase="${id}"]`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    });
+  };
+
+  const compileErrNode = compileError ? (
+    <ProgramCompileError
+      message={compileError}
+      helpTab={compileErrorHelpTab}
+      onOpenManualHelp={onOpenCompileErrorHelp}
+      compact
+    />
+  ) : null;
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden gap-3 bg-[#0D0F12] p-2 rounded border border-[#2D333B] shadow-inner crt-bezel">
+    <div className={`flex flex-1 flex-col overflow-hidden gap-3 bg-[#0D0F12] p-2 rounded border border-[#2D333B] shadow-inner ${liteChrome ? '' : 'crt-bezel'}`}>
+      {editorQuickRef && (
+        <div className="shrink-0 flex items-start gap-2 bg-[#e8d4a8] p-2.5 shadow-md rotate-[-0.5deg] text-[#3d3a36] border border-[#c9b896]">
+          <div className="font-sans text-[13px] font-medium leading-snug italic w-full whitespace-pre-line">
+            "{editorQuickRef.body}"
+            {editorQuickRef.attribution && (
+              <span className="block mt-1 text-right text-[11px] font-bold not-italic">— {editorQuickRef.attribution}</span>
+            )}
+          </div>
+        </div>
+      )}
       {maxPhases != null && (
         <div className="shrink-0 rounded border border-[#30363d] bg-[#12151c] px-2 py-2 font-mono">
           <div className="flex items-center justify-between text-[9px] uppercase tracking-widest text-[#8B949E] mb-1.5">
             <span>Relay rack</span>
-            <span className={rackFull ? 'text-[#F85149] font-bold' : 'text-[#58A6FF]'}>
-              {rackFull ? 'OVERFLOW' : 'OK'}
+            <span className={rackOverflow ? 'text-[#F85149] font-bold' : 'text-[#58A6FF]'}>
+              {rackOverflow ? 'OVERFLOW' : 'OK'}
             </span>
           </div>
-          <div className="flex gap-1.5 items-end justify-center">
+          <div className="flex gap-2 sm:gap-2.5 items-end justify-center px-0.5">
             {Array.from({ length: maxPhases }, (_, i) => {
+              const n = i + 1;
               const filled = i < phaseSlotCount;
+              const pulseFirst = rackPhaseEmptyHint && i === 0 && !filled;
+              const slotShell = `min-h-[4.75rem] w-11 sm:min-h-[5.25rem] sm:w-12 rounded-md border-2 shadow-inner flex flex-col ${
+                filled
+                  ? 'border-[#3FB950]/60 bg-[linear-gradient(180deg,rgba(63,185,80,0.35)_0%,#161b22_45%,#0d1117_100%)]'
+                  : pulseFirst
+                    ? 'border-[#58A6FF] bg-[#0d1117] border-dashed opacity-100 shadow-[0_0_18px_rgba(88,166,255,0.45)] animate-pulse'
+                    : 'border-[#30363d] bg-[#0d1117] border-dashed opacity-70'
+              }`;
+              if (filled) {
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    aria-label={`Phase ${n}, show in editor`}
+                    onClick={() => focusRackPhaseSlot(i)}
+                    className={`${slotShell} cursor-pointer items-stretch p-0 text-left transition-colors hover:border-[#58A6FF]/55 hover:brightness-110 active:opacity-90`}
+                  >
+                    <span className="mx-auto mt-1 text-[11px] font-bold tabular-nums leading-none text-[#3FB950]">{n}</span>
+                    <div className="mx-auto h-2 w-4 shrink-0 rounded-full bg-[#3FB950] shadow-[0_0_8px_#3FB950]" />
+                    <div className="mx-1 mt-1.5 flex-1 min-h-[2.25rem] rounded-[3px] bg-[#21262d] border border-[#30363d]" />
+                  </button>
+                );
+              }
               return (
-                <div
+                <button
                   key={i}
-                  className={`h-14 w-7 rounded-sm border-2 shadow-inner ${
-                    filled
-                      ? 'border-[#3FB950]/60 bg-[linear-gradient(180deg,rgba(63,185,80,0.35)_0%,#161b22_45%,#0d1117_100%)]'
-                      : 'border-[#30363d] bg-[#0d1117] border-dashed opacity-70'
-                  }`}
+                  type="button"
+                  aria-label={`Add phase ${n}`}
+                  onClick={() => {
+                    hapticTap();
+                    appendPhase();
+                  }}
+                  className={`${slotShell} cursor-pointer items-stretch p-0 text-[#8B949E] transition-colors hover:border-[#58A6FF]/55 hover:text-[#58A6FF] active:opacity-90`}
                 >
-                  <div className={`mx-auto mt-1 h-1.5 w-3 rounded-full ${filled ? 'bg-[#3FB950] shadow-[0_0_8px_#3FB950]' : 'bg-[#30363d]'}`} />
-                  <div className="mx-0.5 mt-2 h-6 rounded-[2px] bg-[#21262d] border border-[#30363d]" />
-                </div>
+                  <span className="mx-auto mt-1 text-[11px] font-bold tabular-nums leading-none text-[#6e7681]">{n}</span>
+                  <div
+                    className={`mx-auto h-2 w-4 shrink-0 rounded-full ${pulseFirst ? 'bg-[#58A6FF] shadow-[0_0_10px_#58A6FF]' : 'bg-[#30363d]'}`}
+                  />
+                  <div className="mx-1 mt-1.5 flex flex-1 min-h-0 items-center justify-center rounded-[3px] bg-[#21262d] border border-[#30363d]">
+                    <span className="font-mono text-xl sm:text-2xl font-bold leading-none">+</span>
+                  </div>
+                </button>
               );
             })}
           </div>
-          {rackFull && (
+          {rackOverflow && (
             <div className="mt-2 flex items-center justify-center gap-1 text-[8px] font-bold uppercase tracking-wider text-[#F85149]">
               <span className="inline-block h-2 w-2 rounded-sm bg-[#F85149] animate-pulse shadow-[0_0_10px_#F85149]" />
               Rack overflow LED
             </div>
           )}
+          {compileErrNode && <div className="mt-2">{compileErrNode}</div>}
         </div>
       )}
+      {bomMeter}
+      {maxPhases == null && compileErrNode && <div className="shrink-0">{compileErrNode}</div>}
 
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-editor-touch bg-[linear-gradient(#1A1D23_1px,transparent_1px),linear-gradient(90deg,#1A1D23_1px,transparent_1px)] bg-[size:16px_16px]">
+      <div
+        ref={scrollRef}
+        className="flex-1 min-h-0 overflow-y-auto scrollbar-editor-touch bg-[linear-gradient(#1A1D23_1px,transparent_1px),linear-gradient(90deg,#1A1D23_1px,transparent_1px)] bg-[size:16px_16px]"
+      >
         <Reorder.Group axis="y" values={blocks} onReorder={handleReorderBlocks} className="flex flex-col gap-2 min-h-full p-2">
           {blocks.map((block) => {
             const headerTrim = block.header?.text.trim() ?? '';
@@ -537,15 +568,18 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
                 className={`relative flex flex-col ${chainGrouped ? '' : 'gap-2'}`}
               >
                 {chainGrouped ? (
-                  <div className={`flex flex-col overflow-hidden rounded-md border-2 bg-[#0d1117] ${groupFrame}`}>
+                  <div
+                    data-rack-phase={isPhaseBlock ? block.id : undefined}
+                    className={`flex flex-col overflow-hidden rounded-md border-2 bg-[#0d1117] ${groupFrame}`}
+                  >
                     {renderModule(block.header!.text, block.header!.id, true, block, { groupedHeader: true })}
                     {nestedLineBox}
                   </div>
                 ) : (
-                  <>
+                  <div className="flex flex-col gap-2" data-rack-phase={isPhaseBlock ? block.id : undefined}>
                     {block.header && renderModule(block.header.text, block.header.id, true, block)}
                     {nestedLineBox}
-                  </>
+                  </div>
                 )}
               </Reorder.Item>
             );
@@ -554,105 +588,110 @@ export function MobileEditor({ programCode, setProgramCode, appendPhase, deleteL
         </Reorder.Group>
       </div>
 
-      {/* Add Instruction Button (Styled like a heavy physical button) */}
-      <button
-        onClick={() => { hapticTap(); openSheet(); }}
-        className="w-full h-14 bg-[#1A1D23] text-[#C9D1D9] border-2 border-[#444c56] rounded font-mono font-bold tracking-widest text-[14px] flex items-center justify-center gap-2 shrink-0"
-      >
-        <Cpu size={18} className="text-[#58A6FF]" /> [ WIRE NEW MODULE ]
-      </button>
-
-      {/* Diegetic Terminal Sheet */}
-      <AnimatePresence>
-        {sheetOpen && (
-          <motion.div
-            initial={{ y: '100%' }}
-            animate={{ y: 0 }}
-            exit={{ y: '100%' }}
-            transition={{ type: 'spring', stiffness: 350, damping: 30 }}
-            className="absolute left-0 bottom-0 w-full z-50 bg-[#0A0C0F] border-t-4 border-[#3FB950] shadow-[0_-10px_40px_rgba(0,0,0,0.9)] pb-safe"
-          >
-            <div className="flex items-center justify-between border-b-2 border-[#2D333B] px-4 py-3 bg-[#1A1D23]">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-[#3FB950] animate-pulse rounded-sm" />
-                <span className="font-mono text-[11px] font-bold uppercase tracking-[0.2em] text-[#C9D1D9]">{patchBayStatusLine}</span>
-              </div>
-              <button type="button" onClick={closeSheet} className="text-[#8B949E]"><ChevronDown size={24} /></button>
-            </div>
-            
-            <div className="p-4 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSI0IiBmaWxsPSIjMEEwQzBGIj48L3JlY3Q+CjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiMxQTFEMjMiPjwvcmVjdD4KPC9zdmc+')] min-h-[35vh]">
-              {composerPath === 'root' && (
-                <div className="grid grid-cols-2 gap-3">
-                  <button onClick={() => handleRootChoice('phase')} className={`${keyBase} ${keyNeutral}`}>[ TRIGGER: PHASE ]</button>
-                  <button
-                    type="button"
-                    onClick={() => handleRootChoice('movement')}
-                    disabled={!hasPhaseBlocks}
-                    className={`${keyBase} ${hasPhaseBlocks ? `${keyAction} ${keyDither}` : `${keyNeutral} pointer-events-none opacity-50`}`}
-                  >
-                    [ ROUTE: MOVEMENT ]
-                  </button>
-                  <button onClick={() => handleRootChoice('condition')} className={`${keyBase} ${keyNeutral} ${keyDither} pointer-events-none opacity-50`}>[ SENSOR: IF_QUEUE ]</button>
-                  <button onClick={() => handleRootChoice('pedestrian')} className={`${keyBase} ${keyNeutral} ${keyDither} pointer-events-none opacity-50`}>[ ROUTE: PEDESTRIAN ]</button>
-                </div>
-              )}
-              {/* ... The rest of the builder options remain functionally the same, but use the updated keyBase styling ... */}
-              {(composerPath === 'movement_dir' || composerPath === 'if_dir' || composerPath === 'insert_dir') && (
-                <div className="grid grid-cols-2 gap-3">
-                  {DIRS.map(d => {
-                    const isClosed = closedDirections.has(d);
+      {hasPhaseBlocks && (
+        <div className="flex w-full shrink-0 gap-2 pb-2 px-0.5">
+          {(() => {
+            const highlightStack: 'dir' | 'turn' | 'action' =
+              quickDir == null ? 'dir' : quickTurn == null ? 'turn' : 'action';
+            const stackShell = (active: boolean) =>
+              `flex flex-1 min-w-0 flex-col gap-1 rounded-md p-1.5 border-2 transition-[box-shadow,background-color,border-color] ${
+                active
+                  ? 'border-[#58A6FF] bg-[#58A6FF]/10 shadow-[0_0_14px_rgba(88,166,255,0.22)]'
+                  : 'border-[#30363d] bg-[#161b22]/90'
+              }`;
+            const btnBase =
+              'w-full min-h-[40px] px-1.5 py-1.5 rounded-sm border-2 font-mono text-[9px] sm:text-[10px] font-bold tracking-wide transition-colors disabled:opacity-25 disabled:pointer-events-none';
+            const btnDir = (selected: boolean) =>
+              `${btnBase} ${
+                selected
+                  ? 'border-[#58A6FF] bg-[#58A6FF]/25 text-[#C9D1D9]'
+                  : 'border-[#3d444d] bg-[#21262d] text-[#b1bac4] hover:bg-[#30363d]'
+              }`;
+            const btnTurn = (selected: boolean) =>
+              `${btnBase} ${
+                selected
+                  ? 'border-[#58A6FF] bg-[#58A6FF]/20 text-[#C9D1D9]'
+                  : 'border-[#30363d] bg-[#1a1f26] text-[#8b949e] hover:bg-[#21262d]'
+              }`;
+            return (
+              <>
+                <div className={stackShell(highlightStack === 'dir')}>
+                  {DIRS.map((d) => {
+                    const closed = LevelManager.isApproachFullyClosed(closedLanes, approachKey(d));
                     return (
-                      <button 
-                        key={d} 
-                        onClick={() => !isClosed && handleDir(d)} 
-                        className={`${keyBase} ${keyNeutral} ${composerPath === 'if_dir' && !isClosed ? `${keyDither} pointer-events-none opacity-50` : composerPath === 'movement_dir' && !isClosed ? keyDither : ''} ${isClosed ? 'opacity-20 grayscale pointer-events-none' : ''}`}
+                      <button
+                        key={d}
+                        type="button"
+                        disabled={closed}
+                        onClick={() => {
+                          hapticTap();
+                          setQuickDir(d);
+                          setQuickTurn(null);
+                        }}
+                        className={btnDir(quickDir === d)}
                       >
-                        [ {d} ]
+                        {d}
                       </button>
                     );
                   })}
-                  {composerPath === 'movement_dir' && (
-                    <button 
-                      onClick={() => closedDirections.size === 0 && handleDir('CROSSWALK')} 
-                      className={`col-span-2 ${keyBase} bg-[#D29922]/20 border-[#D29922]/50 text-[#D29922] mt-2 ${closedDirections.size > 0 ? 'opacity-20 grayscale pointer-events-none' : ''} ${keyDither}`}
-                    >
-                      [ CROSSWALK ]
-                    </button>
-                  )}
                 </div>
-              )}
-              {(composerPath === 'movement_turn' || composerPath === 'if_turn' || composerPath === 'insert_turn') && (
-                <div className="grid grid-cols-2 gap-3">
-                  {builderBase === 'CROSSWALK_' ? (
-                    DIRS.map(d => {
-                      const isClosed = closedDirections.has(d);
-                      return (
-                        <button 
-                          key={d} 
-                          onClick={() => !isClosed && handleTurn(d)} 
-                          className={`${keyBase} ${keyNeutral} ${isClosed ? 'opacity-20 grayscale pointer-events-none' : ''}`}
-                        >
-                          [ {d} ]
-                        </button>
-                      );
-                    })
-                  ) : (
-                    TURNS.map(t => (
-                      <button key={t} onClick={() => handleTurn(t)} className={`${keyBase} ${keyNeutral}`}>[ {t.replace('_', '')} ]</button>
-                    ))
-                  )}
+                <div className={stackShell(highlightStack === 'turn')}>
+                  {TURNS.map((t) => {
+                    const title = t === '_ALL' ? 'ALL' : t.replace('_', '');
+                    const disabled = quickDir == null || isTurnClosedForDir(closedLanes, quickDir, t);
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        title={title}
+                        disabled={disabled}
+                        onClick={() => {
+                          if (quickDir == null) return;
+                          hapticTap();
+                          setQuickTurn(t);
+                        }}
+                        className={`${btnTurn(quickTurn === t)} flex items-center justify-center`}
+                      >
+                        {turnQuickIcon(t, TURN_CHIP_ICON_PX)}
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
-              {(composerPath === 'movement_action' || composerPath === 'insert_action') && (
-                <div className="grid grid-cols-2 gap-4 mt-2">
-                  <button type="button" onClick={() => handleAction('GO')} className={`${keyBase} bg-[#3FB950] border-[#238636] text-[#0D0F12] text-[16px] h-20`}>[ .GO ]</button>
-                  <button type="button" onClick={() => handleAction('YIELD')} className={`${keyBase} bg-[#D29922] border-[#a3712f] text-[#0D0F12] text-[16px] h-20`}>[ .YIELD ]</button>
+                <div className={stackShell(highlightStack === 'action')}>
+                  <button
+                    type="button"
+                    disabled={quickDir == null || quickTurn == null}
+                    onClick={() => {
+                      if (quickDir == null || quickTurn == null) return;
+                      hapticTap();
+                      appendRaw(`    ${quickDir}${quickTurn}.${'GO'}`);
+                      setQuickDir(null);
+                      setQuickTurn(null);
+                    }}
+                    className={`${btnBase} border-[#238636] bg-[#3FB950]/25 text-[#3FB950] hover:bg-[#3FB950]/35`}
+                  >
+                    .GO
+                  </button>
+                  <button
+                    type="button"
+                    disabled={quickDir == null || quickTurn == null || !allowYield}
+                    onClick={() => {
+                      if (quickDir == null || quickTurn == null) return;
+                      hapticTap();
+                      appendRaw(`    ${quickDir}${quickTurn}.${'YIELD'}`);
+                      setQuickDir(null);
+                      setQuickTurn(null);
+                    }}
+                    className={`${btnBase} border-[#a3712f] bg-[#D29922]/20 text-[#E3B341] hover:bg-[#D29922]/30`}
+                  >
+                    .YIELD
+                  </button>
                 </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              </>
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 }
